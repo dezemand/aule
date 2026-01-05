@@ -1,7 +1,6 @@
-import { WebSocketClient, type ConnectionState } from "@/lib/websocket";
-import { getValidToken } from "./api";
-import { AuthContext, type AuthContextValue } from "./context";
-import { useContext } from "react";
+import { WebSocketClient, type ConnectionState } from "./websocket-client";
+import { getValidToken } from "../auth/api";
+import { useAuth } from "../auth/use-auth";
 
 /**
  * Singleton WebSocket client instance.
@@ -29,24 +28,10 @@ export function disconnectWebSocket(): void {
 }
 
 /**
- * Hook to access the auth context. Must be used within AuthProvider.
- */
-export function useAuth(): AuthContextValue {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
-}
-
-/**
  * Hook to access just the WebSocket client. Throws if not connected.
  */
 export function useWebSocket(): WebSocketClient {
   const { wsClient, connectionState } = useAuth();
-  if (connectionState !== "connected") {
-    throw new Error("WebSocket not connected");
-  }
   return wsClient;
 }
 

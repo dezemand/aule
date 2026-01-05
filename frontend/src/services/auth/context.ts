@@ -1,4 +1,7 @@
-import type { ConnectionState, WebSocketClient } from "@/lib/websocket";
+import type {
+  ConnectionState,
+  WebSocketClient,
+} from "../websocket/websocket-client";
 import { createContext } from "react";
 
 export interface AuthContextValue {

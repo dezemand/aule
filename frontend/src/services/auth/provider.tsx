@@ -1,17 +1,20 @@
+import { type ConnectionState } from "../websocket/websocket-client";
 import {
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useSyncExternalStore,
   type FC,
   type ReactNode,
 } from "react";
-import { type ConnectionState, type WebSocketClient } from "@/lib/websocket";
-import { wsClient, connectWebSocket, disconnectWebSocket } from "./websocket";
+import {
+  connectWebSocket,
+  disconnectWebSocket,
+  wsClient,
+} from "../websocket/client";
+import { logout } from "./api";
 import { AuthContext, type AuthContextValue } from "./context";
 import { clearAuthToken } from "@/lib/client";
-import { logout } from "./api";
 
 type AuthProviderProps = {
   children: ReactNode;
@@ -48,7 +51,7 @@ export const AuthProvider: FC<AuthProviderProps> = ({
 
     return wsClient.subscribeToAuthFailure(() => {
       console.log("Auth failure, redirecting to login...");
-      window.localStorage.removeItem("auth");
+      clearAuthToken();
       onAuthFailure();
     });
   }, [onAuthFailure]);

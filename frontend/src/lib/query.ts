@@ -51,7 +51,10 @@ export const queryClient = new QueryClient({
 
 export const queryKeys = {
   auth: {
-    start: ["auth", "start"] as const,
-    providers: ["auth", "providers"] as const,
+    start: ["auth", "start"],
+    providers: ["auth", "providers"],
+  },
+  projects: {
+    list: ["projects", "list"],
   },
 } as const;

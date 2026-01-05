@@ -1,4 +1,4 @@
-import { useAuth } from "@/services/auth/websocket";
+import { useAuth } from "@/services/auth/use-auth";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import type { FC } from "react";
 

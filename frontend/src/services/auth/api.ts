@@ -82,13 +82,6 @@ export async function isAuthenticated(): Promise<boolean> {
 }
 
 /**
- * Clear authentication state (for logout).
- */
-export function clearAuth(): void {
-  window.localStorage.removeItem("auth");
-}
-
-/**
  * Refresh the JWT token using the refresh token cookie.
  * Returns the new token or null if refresh failed.
  */
