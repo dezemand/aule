@@ -1,0 +1,215 @@
+openapi: 3.0.3
+info:
+  title: Aule Auth API
+  version: 1.0.0
+  description: |
+    Authentication endpoints for issuing JWTs and handling OAuth flows.
+
+servers:
+  - url: /api/
+
+paths:
+  /auth:
+    get:
+      summary: Issue a new JWT using a refresh token cookie
+      description: |
+        Issues a new short-lived JWT when a valid refresh token cookie `t` is present.
+        The refresh token cookie is HTTP-only and managed by the server.
+      operationId: getJwt
+      parameters:
+        - $ref: "#/components/parameters/RefreshTokenCookie"
+      responses:
+        "200":
+          description: JWT issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+              examples:
+                success:
+                  value:
+                    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                    expires: 2024-01-08T12:34:56Z
+        "401":
+          description: Unauthorized (missing or invalid refresh token cookie)
+        "500":
+          description: Internal Server Error
+
+  /auth/{provider}/start:
+    get:
+      summary: Start OAuth authorization for a provider
+      description: |
+        Initiates an OAuth flow for the specified provider.
+        Returns the authorization URL for the frontend to redirect the user.
+        Sets an HTTP-only state cookie `ostate` that must be returned in the callback flow.
+      operationId: startOAuth
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: OAuth provider identifier
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authorization URL returned
+          headers:
+            Set-Cookie:
+              description: |
+                Sets the HTTP-only state cookie `ostate`, expiring in ~5 minutes.
+                The value encodes the OAuth state and PKCE code verifier.
+              schema:
+                type: string
+              example: ostate=state|codeverifier; Path=/; HttpOnly; Max-Age=300
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartOAuthResponse"
+              examples:
+                success:
+                  value:
+                    authUrl: https://provider.com/oauth2/auth?client_id=...&redirect_uri=...&scope=profile%20email&state=...
+        "400":
+          description: Bad Request (unknown provider)
+        "500":
+          description: Internal Server Error
+
+  /auth/{provider}/callback:
+    get:
+      summary: Handle OAuth callback for a provider
+      description: |
+        Completes the OAuth flow. Requires query parameters `state` and `code`,
+        and the HTTP-only state cookie `ostate` set during the start phase.
+        On success, sets a refresh token cookie `t` and returns a signed JWT.
+      operationId: callbackOAuth
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: OAuth provider identifier
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          description: OAuth state returned by the provider
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: true
+          description: Authorization code returned by the provider
+          schema:
+            type: string
+        - $ref: "#/components/parameters/OAuthStateCookie"
+      responses:
+        "200":
+          description: Authentication successful
+          headers:
+            Set-Cookie:
+              description: |
+                Sets the HTTP-only refresh token cookie `t`, typically expiring in 7 days.
+              schema:
+                type: string
+              example: t=valid-refresh-token; Path=/; HttpOnly; Max-Age=604800
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+              examples:
+                success:
+                  value:
+                    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                    expires: 2024-01-15T12:34:56Z
+        "400":
+          description: Bad Request (missing params)
+        "401":
+          description: Unauthorized (invalid or missing state cookie)
+        "500":
+          description: Internal Server Error
+
+  /auth/providers:
+    get:
+      summary: List available OAuth providers
+      description: Returns the list of configured OAuth providers.
+      operationId: getProviders
+      responses:
+        "200":
+          description: Providers listed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthProvidersResponse"
+              examples:
+                example:
+                  value:
+                    providers:
+                      - id: test
+                        name: Test Provider
+
+components:
+  parameters:
+    RefreshTokenCookie:
+      name: t
+      in: cookie
+      required: true
+      description: HTTP-only refresh token cookie required to issue a JWT
+      schema:
+        type: string
+      example: valid-refresh-token
+
+    OAuthStateCookie:
+      name: ostate
+      in: cookie
+      required: true
+      description: HTTP-only OAuth state cookie set by the start endpoint
+      schema:
+        type: string
+      example: state|codeverifier
+
+  schemas:
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Signed JWT
+        expires:
+          type: string
+          format: date-time
+          description: Refresh token expiry time (RFC3339)
+      required:
+        - token
+
+    StartOAuthResponse:
+      type: object
+      properties:
+        authUrl:
+          type: string
+          format: uri
+          description: Authorization URL to redirect the user to
+      required:
+        - authUrl
+
+    AuthProvidersResponse:
+      type: object
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthProvider"
+      required:
+        - providers
+
+    AuthProvider:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Provider identifier
+        name:
+          type: string
+          description: Human-readable name
+      required:
+        - id
+        - name

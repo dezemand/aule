@@ -1,0 +1,9 @@
+services:
+  auth:
+    image: python:3.12.12-slim
+    command:
+      - /bin/sh
+      - -c
+      - pip install pipx; pipx run oidc-provider-mock -H 0.0.0.0
+    ports:
+      - "9400:9400"
