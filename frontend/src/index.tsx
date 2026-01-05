@@ -1,7 +1,13 @@
 import { serve } from "bun";
 import index from "./index.html";
 
-interface WebSocketData {}
+interface WebSocketData {
+  url: URL;
+}
+
+type ServerWebSocket = Bun.ServerWebSocket<WebSocketData> & {
+  proxy: WebSocket;
+};
 
 const API_ADDR = "localhost:9000";
 
@@ -10,7 +16,14 @@ const server = serve({
     "/*": index,
 
     "/api/ws": async (req, server) => {
-      if (server.upgrade(req, { data: {} })) {
+      const url = new URL(req.url);
+      if (
+        server.upgrade(req, {
+          data: {
+            url,
+          },
+        })
+      ) {
         return;
       }
 
@@ -36,16 +49,33 @@ const server = serve({
     data: {} as WebSocketData,
     maxPayloadLength: 16 * 1024 * 1024,
     sendPings: false,
-    open: (socket) => {
+    open: (socket: ServerWebSocket) => {
+      const url = socket.data.url;
+      const targetUrl = new URL(url.pathname + url.search, `ws://${API_ADDR}`);
+
       console.log("WebSocket connection established");
-      socket.proxy = new WebSocket(`ws://${API_ADDR}/api/ws`);
+      socket.proxy = new WebSocket(targetUrl.href);
+      socket.proxy.onopen = () => {
+        console.log("Connected to backend WebSocket");
+      };
+      socket.proxy.onmessage = (event) => {
+        socket.send(event.data);
+      };
+      socket.proxy.onclose = (event) => {
+        console.log(
+          `Backend WebSocket closed: ${event.code} - ${event.reason}`,
+        );
+        socket.close(event.code, event.reason);
+      };
     },
-    message: (socket, message) => {
+    message: (socket: ServerWebSocket, message) => {
       console.log("Received message:", message);
       socket.send(`Server received: ${message}`);
+      socket.proxy.send(message);
     },
-    close: (socket, code, reason) => {
+    close: (socket: ServerWebSocket, code, reason) => {
       console.log(`WebSocket closed: ${code} - ${reason}`);
+      socket.proxy.close();
     },
   },
 

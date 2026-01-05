@@ -30,7 +30,7 @@ export const AXIOS_INSTANCE = axios.create({
 });
 
 function isAuthRoute(config: InternalAxiosRequestConfig) {
-  return /^\/auth(\/.+)?$/.test(config.url);
+  return /^\/auth(\/.+)?$/.test(config.url ?? "/");
 }
 
 AXIOS_INSTANCE.interceptors.request.use(
@@ -64,6 +64,10 @@ export function getClient<T>(
 export function storeAuthToken(token: string) {
   const encoded = storeTokenSchema.encode({ token });
   window.localStorage.setItem("auth", encoded);
+}
+
+export function clearAuthToken() {
+  window.localStorage.removeItem("auth");
 }
 
 export function getAuthToken(): string | null {

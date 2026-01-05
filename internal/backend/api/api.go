@@ -30,6 +30,7 @@ func registerHttpRoutes(ctx *ApiContext) {
 		r.Route("/auth", func(r fiber.Router) {
 			authHandler := userrest.NewAuthHandler(ctx.AuthService)
 			r.Get("/", authHandler.GetJWT)
+			r.Delete("/", authHandler.Logout)
 			r.Get("/:provider/start", authHandler.StartOAuth)
 			r.Get("/:provider/callback", authHandler.CallbackOAuth)
 			r.Get("/providers", authHandler.GetProviders)

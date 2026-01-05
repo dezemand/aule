@@ -187,3 +187,19 @@ func (h *AuthHandler) GetProviders(c *fiber.Ctx) error {
 		Providers: providersList,
 	})
 }
+
+func (h *AuthHandler) Logout(c *fiber.Ctx) error {
+	refreshTokenCookie := c.Cookies(RefreshTokenCookie)
+	if refreshTokenCookie != "" {
+		_ = h.service.RevokeRefreshToken(refreshTokenCookie)
+	}
+
+	c.Cookie(&fiber.Cookie{
+		Name:     RefreshTokenCookie,
+		Value:    "",
+		HTTPOnly: true,
+		Expires:  time.Unix(0, 0),
+	})
+
+	return c.SendStatus(fiber.StatusNoContent)
+}

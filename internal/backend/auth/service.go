@@ -200,3 +200,8 @@ func (s *AuthService) fetchUserInfo(ctx context.Context, provider string, token 
 	json.NewDecoder(resp.Body).Decode(&userInfo)
 	return &userInfo, nil
 }
+
+func (s *AuthService) RevokeRefreshToken(refreshToken string) error {
+	err := s.refreshTokenRepository.Delete(refreshToken)
+	return err
+}

@@ -35,6 +35,28 @@ paths:
         "500":
           description: Internal Server Error
 
+    delete:
+      summary: Revoke the refresh token cookie
+      description: |
+        Revokes the refresh token cookie `t` by setting it to an expired value.
+      operationId: revokeRefreshToken
+      parameters:
+        - $ref: "#/components/parameters/RefreshTokenCookie"
+      responses:
+        "204":
+          description: Refresh token revoked
+          headers:
+            Set-Cookie:
+              description: |
+                Sets the refresh token cookie `t` to an expired value.
+              schema:
+                type: string
+              example: t=; Path=/; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT
+        "401":
+          description: Unauthorized (missing or invalid refresh token cookie)
+        "500":
+          description: Internal Server Error
+
   /auth/{provider}/start:
     get:
       summary: Start OAuth authorization for a provider
