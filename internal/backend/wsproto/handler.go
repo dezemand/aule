@@ -115,14 +115,14 @@ func (h *Handler) handler() fiber.Handler {
 		})
 
 		go client.readLoop()
+		h.router.onConnect(ctx)
+		defer h.router.onDisconnect(ctx)
 
 		for {
 			select {
 			case <-ctx.Done():
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					client.Send(&Envelope{
-						Type: "Bye",
-					})
+					return // Auth expired
 				}
 				return
 			case r := <-client.readCh:
@@ -151,7 +151,7 @@ func (h *Handler) onMessage(ctx context.Context, messageType int, message []byte
 			log.Info("Invalid JSON")
 			return nil
 		}
-		err = h.router.recv(ctx, &data)
+		err = h.router.onMessage(ctx, &data)
 		if err != nil {
 			log.Info("Invalid routing")
 			return nil

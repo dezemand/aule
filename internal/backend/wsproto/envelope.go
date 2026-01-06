@@ -3,21 +3,23 @@ package wsproto
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type Status string
+type MessageID uuid.UUID
 
 const (
-	StatusOK  Status = "ok"
+	StatusOK  Status = ""
 	StatusErr Status = "error"
 )
 
 type Envelope struct {
-	Status         Status          `json:"status"`
-	Kind           string          `json:"kind"`
+	Status         Status          `json:"status,omitempty"`
 	Type           string          `json:"type"`
-	MessageID      string          `json:"message_id"`
-	RequestID      string          `json:"request_id,omitempty"`
+	MessageID      MessageID       `json:"message_id"`
+	RequestID      MessageID       `json:"request_id,omitempty"`
 	IdempotencyKey string          `json:"idempotency_key,omitempty"`
 	Seq            int64           `json:"seq,omitempty"`
 	Timestamp      time.Time       `json:"time"`
@@ -30,11 +32,10 @@ type EnvelopeErr struct {
 	Detail  any    `json:"detail,omitempty"`
 }
 
-func ToEnvelope(kind, typ, messageID string, payload any) (*Envelope, error) {
+func ToEnvelope(typ string, messageID MessageID, payload any) (*Envelope, error) {
 	b, _ := json.Marshal(payload)
 	return &Envelope{
 		Status:    StatusOK,
-		Kind:      kind,
 		Type:      typ,
 		MessageID: messageID,
 		Timestamp: time.Now().UTC(),
@@ -42,7 +43,7 @@ func ToEnvelope(kind, typ, messageID string, payload any) (*Envelope, error) {
 	}, nil
 }
 
-func ToErrorEnvelope(kind, typ, messageID string, code, message string, detail any) (*Envelope, error) {
+func ToErrorEnvelope(typ string, messageID MessageID, code, message string, detail any) (*Envelope, error) {
 	b, _ := json.Marshal(&EnvelopeErr{
 		Code:    code,
 		Message: message,
@@ -50,7 +51,6 @@ func ToErrorEnvelope(kind, typ, messageID string, code, message string, detail a
 	})
 	return &Envelope{
 		Status:    StatusErr,
-		Kind:      kind,
 		Type:      typ,
 		MessageID: messageID,
 		Timestamp: time.Now().UTC(),

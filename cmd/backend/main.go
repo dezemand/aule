@@ -1,8 +1,6 @@
 package main
 
 import (
-	"time"
-
 	"github.com/dezemandje/aule/internal/backend/api"
 	"github.com/dezemandje/aule/internal/backend/config"
 	"github.com/joho/godotenv"
@@ -10,23 +8,15 @@ import (
 
 func main() {
 	_ = godotenv.Load()
+	cfg := config.NewConfigFromEnv()
 
-	providers := map[string]*config.OAuthConfig{
-		"test": config.NewOAuthConfigFromEnv("OAUTH_test", "test"),
+	api, err := api.Setup(&cfg)
+	if err != nil {
+		panic(err)
 	}
 
-	cfg := &config.Config{
-		Auth: config.AuthConfig{
-			JWTSecret:         "key",
-			JWTExpiration:     time.Minute * 15,
-			RefreshExpiration: time.Hour * 24 * 7,
-			OAuthProviders:    providers,
-		},
+	err = api.Start()
+	if err != nil {
+		panic(err)
 	}
-
-	api := api.Setup(&api.ApiConfig{
-		Config: cfg,
-	})
-
-	api.App.Listen(":9000")
 }

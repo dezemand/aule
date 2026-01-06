@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/dezemandje/aule/internal/backend/api/userrest"
+	"github.com/dezemandje/aule/internal/backend/api/userws"
 	"github.com/dezemandje/aule/internal/backend/auth"
 	"github.com/dezemandje/aule/internal/backend/wsproto"
 	"github.com/gofiber/fiber/v2"
@@ -61,5 +62,11 @@ func setupWsRouter(ctx *ApiContext) {
 }
 
 func registerWsRoutes(ctx *ApiContext) {
+	subscribeHandler := userws.NewSubscriptionsHandler()
+	ctx.UserWsRouter.OnConnect(subscribeHandler.OnClientConnect)
+	ctx.UserWsRouter.OnDisconnect(subscribeHandler.OnClientDisconnect)
+	ctx.UserWsRouter.On("subscribe", subscribeHandler.OnSubscribe)
+	ctx.UserWsRouter.On("unsubscribe", subscribeHandler.OnUnsubscribe)
+
 	// ctx.UserWsRouter.Register("SomeMessageType", someHandlerFunction)
 }

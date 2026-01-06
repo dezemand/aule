@@ -23,7 +23,8 @@ func (s *ProjectService) CreateProject(ctx context.Context, name string, descrip
 		return err
 	}
 
-	s.eventHandler.Emit(event.NewCreateProjectEvent(ctx, id, name))
+	evt := event.NewCreateProjectEvent(ctx, id, name)
+	s.eventHandler.Emit(evt)
 
 	return nil
 }

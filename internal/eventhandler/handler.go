@@ -1,19 +1,32 @@
 package eventhandler
 
-import "context"
+import (
+	"context"
 
-type EventSource struct {
-}
+	"github.com/google/uuid"
+)
+
+type EventID uuid.UUID
 
 type Event interface {
+	ID() EventID
 	Type() string
-	Source() *EventSource
+}
+
+type EventBase struct {
+	id EventID
+}
+
+func NewEventBase(ctx context.Context) EventBase {
+	return EventBase{
+		id: EventID(uuid.New()),
+	}
+}
+
+func (e *EventBase) ID() EventID {
+	return e.id
 }
 
 type EventHandler interface {
 	Emit(Event) error
-}
-
-func GetSource(ctx context.Context) *EventSource {
-	return &EventSource{}
 }

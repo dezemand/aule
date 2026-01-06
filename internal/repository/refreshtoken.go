@@ -1,7 +1,9 @@
 package repository
 
+import "github.com/dezemandje/aule/internal/domain"
+
 type RefreshTokenRepository interface {
-	Create(userID string, token string) error
-	Find(token string) (string, bool)
+	Create(userID domain.UserID, token string) error
+	Find(token string) (domain.UserID, bool)
 	Delete(token string) error
 }

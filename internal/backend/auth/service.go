@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/dezemandje/aule/internal/backend/config"
+	"github.com/dezemandje/aule/internal/domain"
 	"github.com/dezemandje/aule/internal/repository"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
 
@@ -20,8 +22,9 @@ var ErrUnknownOAuthProvider = errors.New("unknown oauth provider")
 
 type AuthService struct {
 	config                 *config.AuthConfig
-	oauth                  map[string]*config.OAuthConfig
+	oauth                  *map[string]config.OAuthProviderConfig
 	refreshTokenRepository repository.RefreshTokenRepository
+	userRepository         repository.UserRepository
 }
 
 type AuthProviderDescripton struct {
@@ -35,15 +38,22 @@ type RefreshToken struct {
 }
 
 type userInfoResponse struct {
-	Sub   string `json:"sub"`
-	Email string `json:"email"`
+	Sub               string   `json:"sub"`
+	Email             string   `json:"email"`
+	EmailVerified     bool     `json:"email_verified"`
+	Name              string   `json:"name"`
+	GivenName         string   `json:"given_name"`
+	PreferredUsername string   `json:"preferred_username"`
+	Nickname          string   `json:"nickname"`
+	Groups            []string `json:"groups"`
 }
 
-func NewAuthService(config *config.AuthConfig, oauth map[string]*config.OAuthConfig, refreshTokenRepository repository.RefreshTokenRepository) *AuthService {
+func NewAuthService(config *config.AuthConfig, oauth *map[string]config.OAuthProviderConfig, refreshTokenRepository repository.RefreshTokenRepository, userRepository repository.UserRepository) *AuthService {
 	return &AuthService{
 		config:                 config,
 		oauth:                  oauth,
 		refreshTokenRepository: refreshTokenRepository,
+		userRepository:         userRepository,
 	}
 }
 
@@ -111,13 +121,15 @@ func (s *AuthService) VerifyJWT(tokenString string) (AuthToken, error) {
 
 	switch role {
 	case RoleUser:
+		id := domain.UserID(uuid.MustParse(claims["id"].(string)))
 		return &UserToken{
-			id:      claims["id"].(string),
+			id:      id,
 			expires: exp,
 		}, nil
 	case RoleAgent:
+		id := domain.AgentInstanceID(uuid.MustParse(claims["id"].(string)))
 		return &AgentToken{
-			id:      claims["id"].(string),
+			id:      id,
 			expires: exp,
 		}, nil
 	default:
@@ -126,7 +138,7 @@ func (s *AuthService) VerifyJWT(tokenString string) (AuthToken, error) {
 }
 
 func (s *AuthService) GetAuthURL(ctx context.Context, provider string) (string, string, error) {
-	oauthConfig, ok := s.oauth[provider]
+	oauthConfig, ok := (*s.oauth)[provider]
 	if !ok {
 		return "", "", ErrUnknownOAuthProvider
 	}
@@ -144,7 +156,7 @@ func (s *AuthService) GetAuthURL(ctx context.Context, provider string) (string, 
 }
 
 func (s *AuthService) Authenticate(ctx context.Context, provider string, code, state, verifier string) (AuthToken, *RefreshToken, error) {
-	oauthConfig, ok := s.oauth[provider]
+	oauthConfig, ok := (*s.oauth)[provider]
 	if !ok {
 		return nil, nil, ErrUnknownOAuthProvider
 	}
@@ -161,35 +173,39 @@ func (s *AuthService) Authenticate(ctx context.Context, provider string, code, s
 		return nil, nil, err
 	}
 
-	_ = userInfo
-
-	userID := "user-1"
+	user, err := s.userRepository.FindBySub(provider, userInfo.Sub)
+	if err != nil && errors.Is(err, repository.ErrNotFound) {
+		user, err = s.createUser(ctx, provider, userInfo)
+	}
+	if err != nil {
+		log.Infof("User retrieval/creation error: %v", err)
+		return nil, nil, err
+	}
 
 	refreshToken := &RefreshToken{
 		Token:  s.generateRefreshToken(),
 		Expiry: time.Now().Add(s.config.RefreshExpiration),
 	}
 
-	s.refreshTokenRepository.Create(userID, refreshToken.Token)
-
-	authToken := newUserToken(userID)
+	err = s.refreshTokenRepository.Create(user.ID, refreshToken.Token)
+	authToken := newUserToken(user.ID)
 
 	return authToken, refreshToken, nil
 }
 
 func (s *AuthService) GetProviders(ctx context.Context) []AuthProviderDescripton {
-	out := make([]AuthProviderDescripton, 0, len(s.oauth))
-	for id := range s.oauth {
+	out := make([]AuthProviderDescripton, 0, len(*s.oauth))
+	for id := range *s.oauth {
 		out = append(out, AuthProviderDescripton{
 			ID:   id,
-			Name: s.oauth[id].Name,
+			Name: (*s.oauth)[id].Name,
 		})
 	}
 	return out
 }
 
 func (s *AuthService) fetchUserInfo(ctx context.Context, provider string, token *oauth2.Token) (*userInfoResponse, error) {
-	req, _ := http.NewRequestWithContext(ctx, "GET", s.oauth[provider].UserInfoURL, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", (*s.oauth)[provider].UserInfoURL, nil)
 	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -198,7 +214,27 @@ func (s *AuthService) fetchUserInfo(ctx context.Context, provider string, token 
 	defer resp.Body.Close()
 	var userInfo userInfoResponse
 	json.NewDecoder(resp.Body).Decode(&userInfo)
+
 	return &userInfo, nil
+}
+
+func (s *AuthService) createUser(ctx context.Context, provider string, userInfo *userInfoResponse) (*domain.User, error) {
+	user := &domain.User{
+		Email: userInfo.Email,
+		Name:  userInfo.Name,
+	}
+
+	id, err := s.userRepository.Create(user)
+	if err != nil {
+		return nil, err
+	}
+
+	err = s.userRepository.AddSub(*id, provider, userInfo.Sub)
+	if err != nil {
+		return nil, err
+	}
+
+	return user, nil
 }
 
 func (s *AuthService) RevokeRefreshToken(refreshToken string) error {

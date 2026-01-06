@@ -2,7 +2,7 @@ package config
 
 import "golang.org/x/oauth2"
 
-type OAuthConfig struct {
+type OAuthProviderConfig struct {
 	oauth2.Config
 
 	ID          string
@@ -10,8 +10,8 @@ type OAuthConfig struct {
 	UserInfoURL string
 }
 
-func NewOAuthConfigFromEnv(root string, id string) *OAuthConfig {
-	return &OAuthConfig{
+func NewOAuthConfigFromEnv(root string, id string) OAuthProviderConfig {
+	return OAuthProviderConfig{
 		Config: oauth2.Config{
 			ClientID:     getEnv(root+"_CLIENT_ID", ""),
 			ClientSecret: getEnv(root+"_CLIENT_SECRET", ""),

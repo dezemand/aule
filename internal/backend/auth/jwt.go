@@ -3,6 +3,7 @@ package auth
 import (
 	"time"
 
+	"github.com/dezemandje/aule/internal/domain"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -33,23 +34,23 @@ type AuthToken interface {
 }
 
 type UserToken struct {
-	id      string
+	id      domain.UserID
 	expires time.Time
 }
 
 type AgentToken struct {
-	id      string
+	id      domain.AgentInstanceID
 	expires time.Time
 }
 
-func newUserToken(id string) *UserToken {
+func newUserToken(id domain.UserID) *UserToken {
 	return &UserToken{
 		id:      id,
 		expires: time.Now().Add(time.Minute * 15),
 	}
 }
 
-func newAgentToken(id string) *AgentToken {
+func newAgentToken(id domain.AgentInstanceID) *AgentToken {
 	return &AgentToken{
 		id:      id,
 		expires: time.Now().Add(time.Hour * 24),
@@ -72,11 +73,11 @@ func (at *AgentToken) Expires() time.Time {
 	return at.expires
 }
 
-func (ut *UserToken) ID() string {
+func (ut *UserToken) ID() domain.UserID {
 	return ut.id
 }
 
-func (at *AgentToken) ID() string {
+func (at *AgentToken) ID() domain.AgentInstanceID {
 	return at.id
 }
 

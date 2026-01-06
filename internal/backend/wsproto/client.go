@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/dezemandje/aule/internal/backend/auth"
+	"github.com/dezemandje/aule/internal/domain"
 	"github.com/gofiber/contrib/websocket"
 	"github.com/google/uuid"
 )
@@ -25,6 +26,14 @@ type Client struct {
 
 func (c *Client) Close() error {
 	return c.conn.Close()
+}
+
+func (c *Client) UserID() domain.UserID {
+	return c.user.ID()
+}
+
+func (c *Client) Connected() bool {
+	return c.alive
 }
 
 func (c *Client) Send(message *Envelope) error {
