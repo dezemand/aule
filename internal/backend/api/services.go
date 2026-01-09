@@ -18,7 +18,7 @@ func setupServices(ctx *ApiContext) error {
 	ctx.Services = &Services{}
 
 	ctx.Services.WsSubscriptions = wssubscriptions.NewService(wssubscriptions.NewMemStore())
-	ctx.Services.Events = nil
+	ctx.Services.Events = eventhandler.NewMemoryEventHandler()
 	ctx.Services.Auth = auth.NewAuthService(
 		&ctx.Config.Auth,
 		&ctx.Config.Auth.OAuthProviders,

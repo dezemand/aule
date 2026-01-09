@@ -1,4 +1,5 @@
 import { WebSocketClient, type ConnectionState } from "./websocket-client";
+export type { ConnectionState };
 import { getValidToken } from "../auth/api";
 import { useAuth } from "../auth/use-auth";
 import { useContext, useEffect, useState, useSyncExternalStore } from "react";

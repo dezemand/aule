@@ -47,7 +47,12 @@ func (s *subCtx) Reply(msg wsproto.WsMsg) error {
 }
 
 func (s *subCtx) ReplyError(code string, message string, detail any) error {
-	return nil
+	env, err := wsproto.ToErrorEnvelope("error", wsproto.NewMessageID(), code, message, detail)
+	if err != nil {
+		return err
+	}
+	env.SubscriptionID = &s.subID
+	return s.client.Send(env)
 }
 
 func (s *subCtx) Send(msg wsproto.WsMsg) error {
@@ -60,7 +65,7 @@ func (s *subCtx) Send(msg wsproto.WsMsg) error {
 }
 
 func (s *subCtx) SetLocals(key string, value any) {
-	panic("unimplemented")
+	// No-op: subscription context doesn't support locals
 }
 
 func (s *subCtx) Release() {

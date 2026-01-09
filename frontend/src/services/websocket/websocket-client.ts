@@ -23,6 +23,9 @@ const envelopeSchema = jsonCodec(
 );
 
 export type EnvelopeSchema = z.infer<typeof envelopeSchema>;
+export type Envelope<T> = Omit<EnvelopeSchema, "payload"> & {
+  payload: T;
+};
 
 export interface EnvelopeError {
   code: string;

@@ -27,6 +27,11 @@ func (e *EventBase) ID() EventID {
 	return e.id
 }
 
+type Handler interface {
+	Handle(Event) error
+}
+
 type EventHandler interface {
 	Emit(Event) error
+	Register(eventType string, handler Handler)
 }

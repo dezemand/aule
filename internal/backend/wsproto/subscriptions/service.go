@@ -59,29 +59,35 @@ func (s *Service) getClient(subscription Subscription) (*wsproto.Client, error) 
 	return sub.client, nil
 }
 
-func (s *Service) subscribe(client *wsproto.Client, topic string, query json.RawMessage, initial bool) (uuid.UUID, error) {
+func (s *Service) subscribe(client *wsproto.Client, topic string, query json.RawMessage) (Subscription, error) {
 	typ, ok := s.types[topic]
 	if !ok {
-		return uuid.Nil, ErrSubscriptionTypeNotFound
+		return nil, ErrSubscriptionTypeNotFound
 	}
 
 	subscription, err := typ.CreateSubscription(client, query)
 	if err != nil {
-		return uuid.Nil, err
+		return nil, err
 	}
 
 	if err := s.store.Add(subscription); err != nil {
-		return uuid.Nil, err
+		return nil, err
 	}
 
-	if initial {
-		err = typ.OnInitial(newSubCtx(client, subscription.ID(), subscription.Query()))
-		if err != nil {
-			// Who cares
-		}
+	return subscription, nil
+}
+
+func (s *Service) sendInitial(client *wsproto.Client, subscription Subscription) error {
+	typ, ok := s.types[subscription.Topic()]
+	if !ok {
+		return ErrSubscriptionTypeNotFound
 	}
 
-	return subscription.ID(), nil
+	return typ.OnInitial(newSubCtx(
+		client,
+		subscription.ID(),
+		subscription.Query(),
+	))
 }
 
 func (s *Service) unsubscribe(clientID uuid.UUID, subscriptionID uuid.UUID) error {

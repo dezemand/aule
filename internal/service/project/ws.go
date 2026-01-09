@@ -2,7 +2,6 @@ package projectsservice
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/dezemandje/aule/internal/backend/wsproto"
 	wssubscriptions "github.com/dezemandje/aule/internal/backend/wsproto/subscriptions"
@@ -27,26 +26,11 @@ func NewWsHandler(
 		service:       service,
 	}
 	subscriptions.Register("projects.list", &projectsSubItem{handler: handler})
-	//eventHandler.Register("projects.create", &projectsEventHandler{handler: handler})
-
-	go handler.foo()
+	if eventHandler != nil {
+		eventHandler.Register("create_project", &projectsEventHandler{handler: handler})
+	}
 
 	return handler
-}
-
-func (h *WsHandler) foo() {
-	ticker := time.NewTicker(10 * time.Second)
-
-	for {
-		<-ticker.C
-		h.subscriptions.SendSubscriptionEvent(
-			MsgTypeProjectsList,
-			func(s wssubscriptions.Subscription) bool {
-				return true
-			},
-			h.OnListProjects,
-		)
-	}
 }
 
 func (h *WsHandler) OnCreateProject(c wsproto.Ctx) error {

@@ -6,36 +6,49 @@ import {
 import { createFileRoute, Link } from "@tanstack/react-router";
 import type { FC } from "react";
 
+interface ProjectsResult {
+  projects: {
+    id: string;
+    name: string;
+    description: string;
+  }[];
+}
+
 const Projects: FC = () => {
-  const { data, status } = useSubscription({
+  const { data, isLoading } = useSubscription<ProjectsResult>({
+    queryKey: queryKeys.projects.list,
     topic: "projects.list",
-    query: null,
   });
 
   return (
     <div className="p-2">
-      <p>Subscription: {status}</p>
-      <pre>{JSON.stringify(data, null, 2)}</pre>
       <p>
         <Link to="/">Go back</Link>
       </p>
 
-      {/*{projects.length === 0 ? (
+      {isLoading ? (
+        <div>Loading projects...</div>
+      ) : !data?.payload.projects || data?.payload.projects.length === 0 ? (
         <div>No projects found.</div>
       ) : (
-        <ul>
-          {projects.map((project) => (
-            <li key={project.id}>
-              <Link
-                to={`/projects/$projectId`}
-                params={{ projectId: project.id }}
-              >
-                {project.name}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}*/}
+        <div>
+          <h2>Projects</h2>
+          <ul>
+            {data?.payload.projects.map((project) => (
+              <li key={project.id}>
+                <Link
+                  to={`/projects/$projectId`}
+                  params={{ projectId: project.id }}
+                >
+                  {project.name}
+                </Link>
+                <br />
+                {project.description}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,10 +1,28 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
+import {
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+  type QueryState,
+} from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { useConnectionState, useWebSocket } from "../websocket/client";
+import type { Envelope } from "../websocket/websocket-client";
 
-export interface UseSubscriptionOptions {
+function isStale(state: QueryState | undefined, staleTime: number): boolean {
+  if (!state) {
+    return true;
+  }
+  return Date.now() - state.dataUpdatedAt > staleTime;
+}
+
+export interface UseSubscriptionOptions<
+  TQueryKey extends QueryKey = QueryKey,
+  TQuery = any,
+> {
+  queryKey: TQueryKey;
   topic: string;
-  query?: any;
+  query?: TQuery;
+  staleTime?: number;
 }
 
 export interface UseSubscriptionResult<T> {
@@ -18,88 +36,105 @@ interface SubscribeAckPayload {
   subscription_id: string;
 }
 
-function subscriptionQueryKey(topic: string, query: any): readonly unknown[] {
-  return ["subscription", "request", topic, query] as const;
-}
-
-function contentQueryKey(topic: string, query: any): readonly unknown[] {
-  return ["subscription", "content", topic, query] as const;
-}
-
-export function useSubscribe<Q = any>(topic: string, query: Q) {
+export function useSubscribe<
+  TQueryKey extends QueryKey = QueryKey,
+  TQuery = any,
+>(
+  subIdRef: RefObject<string | null>,
+  {
+    queryKey,
+    topic,
+    query,
+    staleTime = 60000,
+  }: UseSubscriptionOptions<TQueryKey, TQuery>,
+) {
   const wsClient = useWebSocket();
   const connectionState = useConnectionState();
-  const queryClient = useQueryClient();
+  const cleanup = useRef(() => {});
 
   const key = useMemo(
-    () => subscriptionQueryKey(topic, query),
-    [topic, JSON.stringify(query)],
+    () => ["subscription", ...queryKey],
+    [topic, JSON.stringify(queryKey)],
   );
   const enabled = topic !== null && connectionState === "connected";
 
-  const subscriptionQuery = useQuery({
+  const q = useQuery({
     queryKey: key,
-    queryFn: ({ client }) => {
-      const initial = true;
-      // Check if data is present and not stale
+    queryFn: async ({ client, queryKey: key }) => {
+      const initial =
+        !client.getQueryData(key) ||
+        isStale(client.getQueryState(key), staleTime);
 
-      return wsClient
+      cleanup.current = () => {
+        wsClient.send("subscription.unsubscribe.req", {
+          subscription_id: subIdRef.current,
+        });
+        client.setQueryData(key, null);
+      };
+
+      const res = await wsClient
         .send("subscription.subscribe.req", {
-          topic: topic,
-          query: query,
+          topic,
+          query,
           initial,
         })
         .response();
+
+      subIdRef.current = (res.payload as SubscribeAckPayload)?.subscription_id;
+      return res;
     },
     staleTime: 0,
     gcTime: 0,
     enabled,
   });
 
-  const subscriptionId = useMemo(() => {
-    if (!subscriptionQuery.data?.payload) return null;
-    const payload = subscriptionQuery.data.payload as SubscribeAckPayload;
-    return payload.subscription_id ?? null;
-  }, [subscriptionQuery.data]);
-
   useEffect(() => {
     return () => {
-      if (subscriptionId && wsClient.getState() === "connected") {
-        wsClient.send("subscription.unsubscribe.req", {
-          subscription_id: subscriptionId,
-        });
-        queryClient.setQueryData(key, null);
-      }
+      cleanup.current();
     };
-  }, [subscriptionId, key]);
-
-  return subscriptionId;
+  }, [key]);
 }
 
-export function useSubscription<T>(options: UseSubscriptionOptions) {
+export function useMessageHandler<TQueryKey extends QueryKey = QueryKey>(
+  subscriptionIdRef: RefObject<string | null>,
+  queryKey: TQueryKey,
+) {
   const wsClient = useWebSocket();
   const queryClient = useQueryClient();
-  const subscriptionId = useSubscribe(options.topic, options.query);
-  const subIdRef = useRef<string | null>(subscriptionId);
-  subIdRef.current = subscriptionId;
-
-  const key = useMemo(
-    () => contentQueryKey(options.topic, options.query),
-    [options.topic, JSON.stringify(options.query)],
-  );
 
   useEffect(() => {
     return wsClient.addMessageHandler((msg) => {
-      if (msg.subscription_id === subIdRef.current) {
-        console.log("Received message for subscription:", msg);
-        queryClient.setQueryData(key, msg);
+      if (
+        !subscriptionIdRef.current ||
+        msg.subscription_id !== subscriptionIdRef.current
+      ) {
+        return;
       }
-    });
-  }, [wsClient, queryClient, key]);
 
-  return useQuery({
-    queryKey: key,
+      queryClient.setQueryData(queryKey, msg as any);
+    });
+  }, [wsClient, queryClient, JSON.stringify(queryKey)]);
+}
+
+export function useSubscription<
+  TResult = any,
+  TQueryKey extends QueryKey = QueryKey,
+  TQuery = any,
+>({
+  queryKey,
+  topic,
+  query,
+  staleTime = 60000,
+}: UseSubscriptionOptions<TQueryKey, TQuery>) {
+  const subscriptionIdRef = useRef(null);
+
+  useMessageHandler(subscriptionIdRef, queryKey);
+  useSubscribe(subscriptionIdRef, { queryKey, topic, query, staleTime });
+
+  return useQuery<Envelope<TResult>>({
+    queryKey,
     queryFn: () => new Promise(() => {}),
-    enabled: subscriptionId !== null,
+    staleTime: Infinity,
+    gcTime: Infinity,
   });
 }

@@ -14,14 +14,20 @@ func (h *Handler) OnSubscribe(c wsproto.Ctx) error {
 		return c.Reply(wsproto.Error("error.invalid_payload", "invalid payload", err.Error()))
 	}
 
-	subID, err := h.service.subscribe(c.Client(), body.Topic, body.Query, body.Initial)
+	sub, err := h.service.subscribe(c.Client(), body.Topic, body.Query)
 	if err != nil {
 		return c.Reply(wsproto.FromError(err))
 	}
 
-	return c.Reply(&SubscribeAckMsg{
-		SubscriptionID: subID,
+	err = c.Reply(&SubscribeAckMsg{
+		SubscriptionID: sub.ID(),
 	})
+
+	if body.Initial {
+		h.service.sendInitial(c.Client(), sub)
+	}
+
+	return err
 }
 
 func (h *Handler) OnUnsubscribe(c wsproto.Ctx) error {
