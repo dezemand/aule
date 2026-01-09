@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/dezemandje/aule/internal/backend/auth"
 	"github.com/gofiber/contrib/websocket"
@@ -94,6 +95,7 @@ func (h *Handler) handler() fiber.Handler {
 			user:    auth,
 			alive:   true,
 			readCh:  make(chan read),
+			seq:     1,
 			writeMu: &sync.Mutex{},
 		}
 
@@ -115,13 +117,18 @@ func (h *Handler) handler() fiber.Handler {
 		})
 
 		go client.readLoop()
-		h.router.onConnect(ctx)
-		defer h.router.onDisconnect(ctx)
+		h.router.onConnect(ctx, client)
+		defer h.router.onDisconnect(ctx, client)
 
 		for {
 			select {
 			case <-ctx.Done():
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					client.Send(&Envelope{
+						Type:      "close",
+						MessageID: MessageID(uuid.New()),
+						Timestamp: time.Now(),
+					})
 					return // Auth expired
 				}
 				return
@@ -151,7 +158,8 @@ func (h *Handler) onMessage(ctx context.Context, messageType int, message []byte
 			log.Info("Invalid JSON")
 			return nil
 		}
-		err = h.router.onMessage(ctx, &data)
+		client := GetClient(ctx)
+		err = h.router.onMessage(ctx, client, &data)
 		if err != nil {
 			log.Info("Invalid routing")
 			return nil

@@ -10,11 +10,11 @@ import (
 type ProjectID uuid.UUID
 
 type Project struct {
-	ID          ProjectID
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Goal        string `json:"goal,omitempty"`
+	ID          ProjectID `json:"id"`
+	Key         string    `json:"key"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Goal        string    `json:"goal,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -27,9 +27,9 @@ const (
 )
 
 type ProjectMember struct {
-	ID        uuid.UUID
-	ProjectID ProjectID
-	UserID    UserID
+	ID        uuid.UUID         `json:"id"`
+	ProjectID ProjectID         `json:"project_id"`
+	UserID    UserID            `json:"user_id"`
 	Role      ProjectMemberRole `json:"role"`
 }
 

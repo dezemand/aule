@@ -21,7 +21,12 @@ type Client struct {
 	user    *auth.UserToken
 	alive   bool
 	readCh  chan read
+	seq     int64
 	writeMu *sync.Mutex
+}
+
+func (c *Client) ID() uuid.UUID {
+	return c.id
 }
 
 func (c *Client) Close() error {
@@ -39,6 +44,8 @@ func (c *Client) Connected() bool {
 func (c *Client) Send(message *Envelope) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	message.Seq = c.seq
+	c.seq++
 	err := c.conn.WriteJSON(message)
 	return err
 }

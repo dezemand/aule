@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
+
+	"github.com/dezemandje/aule/internal/log"
 )
+
+var logger log.Logger
 
 type AgentConfig struct {
 	taskID        string
@@ -13,11 +16,16 @@ type AgentConfig struct {
 }
 
 func main() {
-	// Retrieve task ID from environment variable
-	_, err := loadConfig()
+	log.Init()
+	logger = log.GetLogger("cmd", "agent")
+
+	cfg, err := loadConfig()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logger.Error("Failed to load config", "err", err)
+		os.Exit(1)
 	}
+
+	_ = cfg
 
 	// Retrieve task details from the endpoint
 	// GET /agent/v1/tasks/{task_id}

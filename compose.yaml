@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: aule
+      POSTGRES_PASSWORD: aule
+      POSTGRES_DB: aule
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aule -d aule"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   auth:
     image: python:3.12.12-slim
     command:
@@ -7,3 +23,6 @@ services:
       - pip install pipx; pipx run oidc-provider-mock -H 0.0.0.0
     ports:
       - "9400:9400"
+
+volumes:
+  postgres_data:

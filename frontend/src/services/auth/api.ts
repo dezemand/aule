@@ -1,7 +1,7 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { getAuleAuthAPI } from "./api.gen";
 import { queryKeys } from "@/lib/query";
-import { clearAuthToken, getAuthToken, storeAuthToken } from "@/lib/client";
+import { auth, isTokenValid } from "./store";
 
 export const authProviders = queryOptions({
   queryKey: queryKeys.auth.providers,
@@ -22,28 +22,13 @@ export async function authFromCallback(
     state,
     code,
   });
-  storeAuthToken(response.token);
+  auth.setToken(response.token);
 }
 
+/** Invalidates the refresh token. */
 export async function logout() {
   await getAuleAuthAPI().revokeRefreshToken();
-  clearAuthToken();
-}
-
-/**
- * Check if a JWT token is expired or will expire within the buffer time.
- */
-function isTokenValid(token: string, bufferSeconds = 60): boolean {
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    const exp = payload.exp * 1000; // Convert to milliseconds
-    const now = Date.now();
-    const buffer = bufferSeconds * 1000;
-    return exp - now > buffer;
-  } catch {
-    // If we can't parse the token, assume it's invalid
-    return false;
-  }
+  auth.clearToken();
 }
 
 /**
@@ -54,7 +39,7 @@ async function tryRefreshToken(): Promise<boolean> {
   try {
     const response = await getAuleAuthAPI().getJwt();
     if (response.token) {
-      storeAuthToken(response.token);
+      auth.setToken(response.token);
       return true;
     }
     return false;
@@ -70,7 +55,7 @@ async function tryRefreshToken(): Promise<boolean> {
  */
 export async function isAuthenticated(): Promise<boolean> {
   // Check for existing token
-  const token = getAuthToken();
+  const token = auth.getToken();
 
   if (token && isTokenValid(token)) {
     // Token exists and is valid
@@ -85,12 +70,11 @@ export async function isAuthenticated(): Promise<boolean> {
  * Refresh the JWT token using the refresh token cookie.
  * Returns the new token or null if refresh failed.
  */
-
 async function refreshToken(): Promise<string | null> {
   try {
     const response = await getAuleAuthAPI().getJwt();
     if (response.token) {
-      storeAuthToken(response.token);
+      auth.setToken(response.token);
       return response.token;
     }
     return null;
@@ -99,31 +83,17 @@ async function refreshToken(): Promise<string | null> {
     return null;
   }
 }
-/**
- * Check if a JWT token is expiring within the next minute.
- */
-function isTokenExpiringSoon(token: string): boolean {
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    const exp = payload.exp * 1000; // Convert to milliseconds
-    const now = Date.now();
-    const oneMinute = 60 * 1000;
-    return exp - now < oneMinute;
-  } catch {
-    // If we can't parse the token, assume it's expired
-    return true;
-  }
-}
+
 /**
  * Get a valid auth token, refreshing if necessary.
  */
 export async function getValidToken(): Promise<string | null> {
   // First try to use existing token
-  const existingToken = getAuthToken();
+  const existingToken = auth.getToken();
   if (existingToken) {
     // Check if token is still valid (not expired)
     // JWT tokens have 15 min expiry, so we refresh if < 1 min remaining
-    if (!isTokenExpiringSoon(existingToken)) {
+    if (isTokenValid(existingToken, 60)) {
       return existingToken;
     }
   }

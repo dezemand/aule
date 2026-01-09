@@ -12,6 +12,7 @@ import (
 	"github.com/dezemandje/aule/internal/backend/config"
 	"github.com/dezemandje/aule/internal/domain"
 	"github.com/dezemandje/aule/internal/repository"
+	userservice "github.com/dezemandje/aule/internal/service/user"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -23,8 +24,8 @@ var ErrUnknownOAuthProvider = errors.New("unknown oauth provider")
 type AuthService struct {
 	config                 *config.AuthConfig
 	oauth                  *map[string]config.OAuthProviderConfig
-	refreshTokenRepository repository.RefreshTokenRepository
-	userRepository         repository.UserRepository
+	refreshTokenRepository RefreshTokenRepository
+	userRepository         userservice.Repository
 }
 
 type AuthProviderDescripton struct {
@@ -48,7 +49,7 @@ type userInfoResponse struct {
 	Groups            []string `json:"groups"`
 }
 
-func NewAuthService(config *config.AuthConfig, oauth *map[string]config.OAuthProviderConfig, refreshTokenRepository repository.RefreshTokenRepository, userRepository repository.UserRepository) *AuthService {
+func NewAuthService(config *config.AuthConfig, oauth *map[string]config.OAuthProviderConfig, refreshTokenRepository RefreshTokenRepository, userRepository userservice.Repository) *AuthService {
 	return &AuthService{
 		config:                 config,
 		oauth:                  oauth,
@@ -82,8 +83,8 @@ func (s *AuthService) generateRefreshToken() string {
 }
 
 func (s *AuthService) RefreshAuthToken(refreshToken string) (AuthToken, error) {
-	userID, ok := s.refreshTokenRepository.Find(refreshToken)
-	if !ok {
+	userID, err := s.refreshTokenRepository.Find(refreshToken)
+	if err != nil {
 		return nil, errors.New("invalid refresh token")
 	}
 
@@ -173,7 +174,7 @@ func (s *AuthService) Authenticate(ctx context.Context, provider string, code, s
 		return nil, nil, err
 	}
 
-	user, err := s.userRepository.FindBySub(provider, userInfo.Sub)
+	user, err := s.userRepository.FindByIdentity(provider, userInfo.Sub)
 	if err != nil && errors.Is(err, repository.ErrNotFound) {
 		user, err = s.createUser(ctx, provider, userInfo)
 	}
@@ -187,7 +188,7 @@ func (s *AuthService) Authenticate(ctx context.Context, provider string, code, s
 		Expiry: time.Now().Add(s.config.RefreshExpiration),
 	}
 
-	err = s.refreshTokenRepository.Create(user.ID, refreshToken.Token)
+	err = s.refreshTokenRepository.Create(user.ID, refreshToken.Token, refreshToken.Expiry)
 	authToken := newUserToken(user.ID)
 
 	return authToken, refreshToken, nil
@@ -229,7 +230,7 @@ func (s *AuthService) createUser(ctx context.Context, provider string, userInfo 
 		return nil, err
 	}
 
-	err = s.userRepository.AddSub(*id, provider, userInfo.Sub)
+	err = s.userRepository.AddIdentity(*id, provider, userInfo.Sub)
 	if err != nil {
 		return nil, err
 	}

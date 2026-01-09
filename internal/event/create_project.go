@@ -10,6 +10,7 @@ import (
 type CreateProjectEvent struct {
 	eventhandler.EventBase
 	ProjectID domain.ProjectID `json:"project_id"`
+	CreatorID domain.UserID    `json:"creator_id"`
 	Name      string           `json:"name"`
 }
 

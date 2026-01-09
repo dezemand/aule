@@ -7,6 +7,7 @@ import (
 type Config struct {
 	Server ServerConfig
 	Auth   AuthConfig
+	DB     DBConfig
 }
 
 type ServerConfig struct {
@@ -19,8 +20,9 @@ type ServerConfig struct {
 
 func NewConfigFromEnv() Config {
 	return Config{
-		Auth:   NewAuthConfigFromEnv(),
 		Server: NewServerConfigFromEnv(),
+		Auth:   NewAuthConfigFromEnv(),
+		DB:     NewDBConfigFromEnv(),
 	}
 }
 

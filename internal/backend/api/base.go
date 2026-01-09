@@ -1,17 +1,16 @@
 package api
 
 import (
-	"github.com/dezemandje/aule/internal/backend/auth"
 	"github.com/dezemandje/aule/internal/backend/config"
 	"github.com/dezemandje/aule/internal/backend/wsproto"
-	dbmemory "github.com/dezemandje/aule/internal/repository/memory"
 	"github.com/gofiber/fiber/v2"
 )
 
 type ApiContext struct {
 	Config *config.Config
 
-	AuthService *auth.AuthService
+	Data     *Data
+	Services *Services
 
 	UserWsHandler *wsproto.Handler
 	UserWsRouter  *wsproto.Router
@@ -19,10 +18,15 @@ type ApiContext struct {
 	App *fiber.App
 }
 
-func Setup(cfg *config.Config) (*ApiContext, error) {
-	ctx := &ApiContext{Config: cfg}
+func Setup(cfg *config.Config) (ctx *ApiContext, err error) {
+	ctx = &ApiContext{Config: cfg}
 
-	setupAuth(ctx)
+	if err := setupData(ctx); err != nil {
+		return nil, err
+	}
+	if err := setupServices(ctx); err != nil {
+		return nil, err
+	}
 	setupWsRouter(ctx)
 	setupHttpRouter(ctx)
 
@@ -31,13 +35,4 @@ func Setup(cfg *config.Config) (*ApiContext, error) {
 
 func (ctx *ApiContext) Start() error {
 	return ctx.App.Listen(ctx.Config.Server.Host + ":" + ctx.Config.Server.Port)
-}
-
-func setupAuth(ctx *ApiContext) {
-	ctx.AuthService = auth.NewAuthService(
-		&ctx.Config.Auth,
-		&ctx.Config.Auth.OAuthProviders,
-		dbmemory.NewMemoryRefreshTokenRepository(),
-		dbmemory.NewMemoryUserRepository(),
-	)
 }

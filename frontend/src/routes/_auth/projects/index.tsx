@@ -1,21 +1,26 @@
 import { queryKeys } from "@/lib/query";
-import { useSubscription } from "@/services/websocket/use-subscription";
-import { useQuery } from "@tanstack/react-query";
+import {
+  useSubscribe,
+  useSubscription,
+} from "@/services/subscriptions/use-subscription";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import type { FC } from "react";
 
 const Projects: FC = () => {
-  const { data } = useSubscription({
-    queryKey: queryKeys.projects.list,
+  const { data, status } = useSubscription({
+    topic: "projects.list",
+    query: null,
   });
-  const projects = [{ id: "abc", name: "Hello!" }] as Array<{
-    id: string;
-    name: string;
-  }>;
 
   return (
     <div className="p-2">
-      {projects.length === 0 ? (
+      <p>Subscription: {status}</p>
+      <pre>{JSON.stringify(data, null, 2)}</pre>
+      <p>
+        <Link to="/">Go back</Link>
+      </p>
+
+      {/*{projects.length === 0 ? (
         <div>No projects found.</div>
       ) : (
         <ul>
@@ -30,7 +35,7 @@ const Projects: FC = () => {
             </li>
           ))}
         </ul>
-      )}
+      )}*/}
     </div>
   );
 };

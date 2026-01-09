@@ -10,17 +10,16 @@ import (
 type Status string
 type MessageID uuid.UUID
 
-const (
-	StatusOK  Status = ""
-	StatusErr Status = "error"
-)
+func NewMessageID() MessageID {
+	return MessageID(uuid.New())
+}
 
 type Envelope struct {
-	Status         Status          `json:"status,omitempty"`
 	Type           string          `json:"type"`
-	MessageID      MessageID       `json:"message_id"`
-	RequestID      MessageID       `json:"request_id,omitempty"`
+	MessageID      MessageID       `json:"id"`
+	RequestID      *MessageID      `json:"reply_to,omitempty"`
 	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	SubscriptionID *uuid.UUID      `json:"subscription_id,omitempty"`
 	Seq            int64           `json:"seq,omitempty"`
 	Timestamp      time.Time       `json:"time"`
 	Payload        json.RawMessage `json:"payload,omitempty"`
@@ -35,7 +34,6 @@ type EnvelopeErr struct {
 func ToEnvelope(typ string, messageID MessageID, payload any) (*Envelope, error) {
 	b, _ := json.Marshal(payload)
 	return &Envelope{
-		Status:    StatusOK,
 		Type:      typ,
 		MessageID: messageID,
 		Timestamp: time.Now().UTC(),
@@ -50,7 +48,6 @@ func ToErrorEnvelope(typ string, messageID MessageID, code, message string, deta
 		Detail:  detail,
 	})
 	return &Envelope{
-		Status:    StatusErr,
 		Type:      typ,
 		MessageID: messageID,
 		Timestamp: time.Now().UTC(),
@@ -63,4 +60,29 @@ func (e *Envelope) DecodePayload(v any) error {
 		return nil
 	}
 	return json.Unmarshal(e.Payload, v)
+}
+
+func (id MessageID) MarshalJSON() ([]byte, error) {
+	u := uuid.UUID(id)
+	return json.Marshal(u.String())
+}
+
+func (id *MessageID) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+
+	u, err := uuid.Parse(s)
+	if err != nil {
+		return err
+	}
+
+	*id = MessageID(u)
+	return nil
+}
+
+func (id MessageID) String() string {
+	u := uuid.UUID(id)
+	return u.String()
 }

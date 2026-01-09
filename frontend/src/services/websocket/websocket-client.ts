@@ -1,22 +1,28 @@
+import { jsonCodec } from "@/lib/utils";
+import z from "zod";
+import { v4 as uuid } from "uuid";
+import { MessageReceipt } from "./message";
+
 export type ConnectionState =
   | "disconnected"
   | "connecting"
   | "connected"
   | "reconnecting";
 
-export type EnvelopeStatus = "ok" | "error";
+const envelopeSchema = jsonCodec(
+  z.object({
+    type: z.string(),
+    id: z.uuid(),
+    reply_to: z.uuid().optional(),
+    idempotency_key: z.string().optional(),
+    subscription_id: z.uuid().optional(),
+    seq: z.number().optional(),
+    time: z.iso.datetime(),
+    payload: z.unknown().optional(),
+  }),
+);
 
-export interface Envelope<T = unknown> {
-  status: EnvelopeStatus;
-  kind: string;
-  type: string;
-  message_id: string;
-  request_id?: string;
-  idempotency_key?: string;
-  seq?: number;
-  time: string;
-  payload?: T;
-}
+export type EnvelopeSchema = z.infer<typeof envelopeSchema>;
 
 export interface EnvelopeError {
   code: string;
@@ -24,7 +30,7 @@ export interface EnvelopeError {
   detail?: unknown;
 }
 
-export type MessageHandler = (envelope: Envelope) => void;
+export type MessageHandler = (envelope: EnvelopeSchema) => void;
 export type ConnectionStateHandler = (state: ConnectionState) => void;
 export type AuthFailureHandler = () => void;
 
@@ -59,6 +65,7 @@ export class WebSocketClient {
   private messageHandlers = new Set<MessageHandler>();
   private stateHandlers = new Set<ConnectionStateHandler>();
   private authFailureHandlers = new Set<AuthFailureHandler>();
+  private seq = 1;
 
   private readonly options: Required<
     Pick<
@@ -69,7 +76,8 @@ export class WebSocketClient {
 
   constructor(options: WebSocketClientOptions) {
     this.options = {
-      initialRetryDelay: options.initialRetryDelay ?? DEFAULT_INITIAL_RETRY_DELAY,
+      initialRetryDelay:
+        options.initialRetryDelay ?? DEFAULT_INITIAL_RETRY_DELAY,
       maxRetryDelay: options.maxRetryDelay ?? DEFAULT_MAX_RETRY_DELAY,
       maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
       getToken: options.getToken,
@@ -155,6 +163,38 @@ export class WebSocketClient {
     this.setState("disconnected");
   }
 
+  send(
+    type: string,
+    payload: any,
+    idempotencyKey?: string,
+    replyTo?: string,
+  ): MessageReceipt {
+    if (this.getState() !== "connected") {
+      console.warn("Cannot send message, WebSocket not connected");
+      throw new Error("WebSocket not connected");
+    }
+
+    const envelope: EnvelopeSchema = {
+      type,
+      id: uuid(),
+      seq: this.seq++,
+      time: new Date().toISOString(),
+      payload,
+    };
+
+    if (idempotencyKey) {
+      envelope.idempotency_key = idempotencyKey;
+    }
+    if (replyTo) {
+      envelope.reply_to = replyTo;
+    }
+
+    const json = envelopeSchema.encode(envelope);
+    this.ws!.send(json);
+
+    return new MessageReceipt(this, envelope.id);
+  }
+
   private setupEventHandlers(): void {
     if (!this.ws) return;
 
@@ -175,7 +215,7 @@ export class WebSocketClient {
 
     this.ws.onmessage = (event) => {
       try {
-        const envelope = JSON.parse(event.data) as Envelope;
+        const envelope = envelopeSchema.decode(event.data);
         this.handleMessage(envelope);
       } catch (error) {
         console.error("Failed to parse WebSocket message:", error);
@@ -183,10 +223,10 @@ export class WebSocketClient {
     };
   }
 
-  private handleMessage(envelope: Envelope): void {
+  private handleMessage(envelope: EnvelopeSchema): void {
     // Handle "Bye" message indicating auth expiration
-    if (envelope.type === "Bye") {
-      console.log("Received Bye message, reconnecting with fresh token...");
+    if (envelope.type === "connection.close") {
+      console.log("Received close message, reconnecting with fresh token...");
       this.ws?.close(1000, "Server requested disconnect");
       return;
     }

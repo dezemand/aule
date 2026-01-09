@@ -70,7 +70,6 @@ const server = serve({
     },
     message: (socket: ServerWebSocket, message) => {
       console.log("Received message:", message);
-      socket.send(`Server received: ${message}`);
       socket.proxy.send(message);
     },
     close: (socket: ServerWebSocket, code, reason) => {

@@ -46,7 +46,7 @@ func (r *MemoryUserRepository) Update(user *domain.User) error {
 	return nil
 }
 
-func (r *MemoryUserRepository) FindBySub(provider string, sub string) (*domain.User, error) {
+func (r *MemoryUserRepository) FindByIdentity(provider string, sub string) (*domain.User, error) {
 	log.Infof("FindBySub %v %v", provider, sub)
 
 	key := loginKey{provider: provider, sub: sub}
@@ -61,7 +61,7 @@ func (r *MemoryUserRepository) FindBySub(provider string, sub string) (*domain.U
 	return &user, nil
 }
 
-func (r *MemoryUserRepository) AddSub(userID domain.UserID, provider string, sub string) error {
+func (r *MemoryUserRepository) AddIdentity(userID domain.UserID, provider string, sub string) error {
 	log.Infof("AddSub %v %v %v", userID, provider, sub)
 
 	key := loginKey{provider: provider, sub: sub}

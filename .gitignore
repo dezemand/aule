@@ -10,3 +10,5 @@ logs/
 .cache
 *.tsbuildinfo
 out/
+bin/
+git-test/

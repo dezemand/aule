@@ -1,11 +1,10 @@
-package userrest
+package auth
 
 import (
 	"errors"
 	"strings"
 	"time"
 
-	"github.com/dezemandje/aule/internal/backend/auth"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 )
@@ -14,10 +13,10 @@ const RefreshTokenCookie = "t"
 const OAuthStateCookie = "ostate"
 
 type AuthHandler struct {
-	service *auth.AuthService
+	service *AuthService
 }
 
-func NewAuthHandler(authService *auth.AuthService) *AuthHandler {
+func NewAuthHandler(authService *AuthService) *AuthHandler {
 	return &AuthHandler{
 		service: authService,
 	}
@@ -77,7 +76,7 @@ type StartOAuthResponse struct {
 func (h *AuthHandler) StartOAuth(c *fiber.Ctx) error {
 	url, cookie, err := h.service.GetAuthURL(c.UserContext(), c.Params("provider"))
 	if err != nil {
-		if errors.Is(err, auth.ErrUnknownOAuthProvider) {
+		if errors.Is(err, ErrUnknownOAuthProvider) {
 			return fiber.ErrBadRequest
 		}
 

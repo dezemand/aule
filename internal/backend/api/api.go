@@ -1,10 +1,11 @@
 package api
 
 import (
-	"github.com/dezemandje/aule/internal/backend/api/userrest"
-	"github.com/dezemandje/aule/internal/backend/api/userws"
 	"github.com/dezemandje/aule/internal/backend/auth"
 	"github.com/dezemandje/aule/internal/backend/wsproto"
+	wsidempotency "github.com/dezemandje/aule/internal/backend/wsproto/idempotency"
+	wssubscriptions "github.com/dezemandje/aule/internal/backend/wsproto/subscriptions"
+	projectsservice "github.com/dezemandje/aule/internal/service/project"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/healthcheck"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -25,11 +26,11 @@ func setupHttpRouter(ctx *ApiContext) {
 }
 
 func registerHttpRoutes(ctx *ApiContext) {
-	authMw := auth.NewAuthMiddleware(ctx.AuthService)
+	authMw := auth.NewAuthMiddleware(ctx.Services.Auth)
 
 	ctx.App.Route("/api", func(r fiber.Router) {
 		r.Route("/auth", func(r fiber.Router) {
-			authHandler := userrest.NewAuthHandler(ctx.AuthService)
+			authHandler := auth.NewAuthHandler(ctx.Services.Auth)
 			r.Get("/", authHandler.GetJWT)
 			r.Delete("/", authHandler.Logout)
 			r.Get("/:provider/start", authHandler.StartOAuth)
@@ -57,16 +58,33 @@ func notFound(c *fiber.Ctx) error {
 
 func setupWsRouter(ctx *ApiContext) {
 	ctx.UserWsRouter = wsproto.NewRouter()
-	registerWsRoutes(ctx)
 	ctx.UserWsHandler = wsproto.NewHandler(ctx.UserWsRouter)
+	registerWsRoutes(ctx)
+}
+
+type Hey struct {
+	Message string `json:"message"`
+}
+
+func (h *Hey) Type() string {
+	return "hey"
 }
 
 func registerWsRoutes(ctx *ApiContext) {
-	subscribeHandler := userws.NewSubscriptionsHandler()
-	ctx.UserWsRouter.OnConnect(subscribeHandler.OnClientConnect)
-	ctx.UserWsRouter.OnDisconnect(subscribeHandler.OnClientDisconnect)
-	ctx.UserWsRouter.On("subscribe", subscribeHandler.OnSubscribe)
-	ctx.UserWsRouter.On("unsubscribe", subscribeHandler.OnUnsubscribe)
+	store := wsidempotency.NewMemoryStore()
+	idemMgr := wsidempotency.NewService(store)
+	ctx.UserWsRouter.Use(idemMgr.Middleware())
 
-	// ctx.UserWsRouter.Register("SomeMessageType", someHandlerFunction)
+	subscribeHandler := wssubscriptions.NewHandler(ctx.Services.WsSubscriptions)
+	ctx.UserWsRouter.OnDisconnect(subscribeHandler.OnClose)
+	ctx.UserWsRouter.On(wssubscriptions.MsgTypeSubscribe, subscribeHandler.OnSubscribe)
+	ctx.UserWsRouter.On(wssubscriptions.MsgTypeUnsubscribe, subscribeHandler.OnUnsubscribe)
+
+	projectsHander := projectsservice.NewWsHandler(ctx.Services.Events, ctx.Services.WsSubscriptions, ctx.Services.Project)
+	ctx.UserWsRouter.On(projectsservice.MsgTypeProjectsList, projectsHander.OnListProjects)
+	ctx.UserWsRouter.On(projectsservice.MsgTypeProjectCreate, projectsHander.OnCreateProject)
+
+	ctx.UserWsRouter.OnConnect(func(c wsproto.Ctx) error {
+		return c.Send(&Hey{Message: "Welcome to the Aule WebSocket API!"})
+	})
 }

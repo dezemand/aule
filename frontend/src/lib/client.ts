@@ -1,20 +1,14 @@
+import { auth } from "@/services/auth/store";
 import axios, {
   AxiosError,
   AxiosHeaders,
   type AxiosRequestConfig,
   type InternalAxiosRequestConfig,
 } from "axios";
-import { jsonCodec } from "./utils";
-import z from "zod";
 
 const API_BASE_URL = "/api";
 export type ErrorType<Error> = AxiosError<Error>;
 export type BodyType<BodyData> = BodyData;
-const storeTokenSchema = jsonCodec(
-  z.object({
-    token: z.string(),
-  }),
-);
 
 // const isDevelopment = import.meta.env.DEV;
 // const API_BASE_URL = isDevelopment
@@ -39,7 +33,7 @@ AXIOS_INSTANCE.interceptors.request.use(
       return config;
     }
 
-    const authToken = getAuthToken();
+    const authToken = auth.getToken();
     if (authToken) {
       config.headers ??= new AxiosHeaders();
       config.headers.set("Authorization", `Bearer ${authToken}`);
@@ -59,22 +53,4 @@ export function getClient<T>(
   }).then(({ data }) => data);
 
   return promise;
-}
-
-export function storeAuthToken(token: string) {
-  const encoded = storeTokenSchema.encode({ token });
-  window.localStorage.setItem("auth", encoded);
-}
-
-export function clearAuthToken() {
-  window.localStorage.removeItem("auth");
-}
-
-export function getAuthToken(): string | null {
-  const stored = window.localStorage.getItem("auth");
-  if (!stored) {
-    return null;
-  }
-  const obj = storeTokenSchema.decode(stored);
-  return obj.token;
 }
