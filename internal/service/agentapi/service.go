@@ -29,6 +29,17 @@ type Service struct {
 	agentRepo      AgentInstanceRepository
 	logRepo        AgentLogRepository
 	defaultWorkDir string
+	llmConfig      *LLMConfig // Default LLM configuration
+}
+
+// ServiceConfig holds configuration for the agent API service
+type ServiceConfig struct {
+	DefaultWorkDir   string
+	LLMProxyEndpoint string
+	LLMProvider      string
+	LLMModel         string
+	LLMMaxTokens     int
+	LLMTemperature   float64
 }
 
 // NewService creates a new agent API service
@@ -37,14 +48,36 @@ func NewService(
 	taskRepo TaskRepository,
 	agentRepo AgentInstanceRepository,
 	logRepo AgentLogRepository,
-	defaultWorkDir string,
+	cfg ServiceConfig,
 ) *Service {
+	var llmConfig *LLMConfig
+	if cfg.LLMProxyEndpoint != "" {
+		llmConfig = &LLMConfig{
+			Endpoint:    cfg.LLMProxyEndpoint,
+			Provider:    cfg.LLMProvider,
+			Model:       cfg.LLMModel,
+			MaxTokens:   cfg.LLMMaxTokens,
+			Temperature: cfg.LLMTemperature,
+		}
+		// Set defaults
+		if llmConfig.Provider == "" {
+			llmConfig.Provider = "openai"
+		}
+		if llmConfig.Model == "" {
+			llmConfig.Model = "gpt-4o"
+		}
+		if llmConfig.MaxTokens == 0 {
+			llmConfig.MaxTokens = 4096
+		}
+	}
+
 	return &Service{
 		eventHandler:   eventHandler,
 		taskRepo:       taskRepo,
 		agentRepo:      agentRepo,
 		logRepo:        logRepo,
-		defaultWorkDir: defaultWorkDir,
+		defaultWorkDir: cfg.DefaultWorkDir,
+		llmConfig:      llmConfig,
 	}
 }
 
@@ -73,6 +106,7 @@ func (s *Service) GetTaskDetails(ctx context.Context, taskID domain.TaskID) (*Ta
 		Context:      task.Context,
 		AllowedTools: allowedTools,
 		WorkDir:      s.defaultWorkDir,
+		LLMConfig:    s.llmConfig,
 	}, nil
 }
 

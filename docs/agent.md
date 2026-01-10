@@ -229,11 +229,156 @@ The agent system uses these tables (migration `000002_tasks_agents`):
    - Or /fail if error occurred
 ```
 
+## LLM Proxy
+
+The LLM Proxy is a separate service that manages LLM API credentials and provides a unified interface for agents to access LLM providers. This eliminates the need for agents to have direct access to API keys.
+
+### Architecture
+
+```
+Agent Binary                        Backend
+    │                                  │
+    │ GET /agent/v1/tasks/{id}         │
+    ├─────────────────────────────────►│
+    │◄─────────────────────────────────┤
+    │   Returns: task + LLMConfig      │
+    │   (endpoint, provider, model)    │
+    │                                  │
+    │                              LLM Proxy
+    │ POST /v1/complete                │
+    │ Headers:                         │
+    │   Authorization: Bearer <jwt>    │
+    │   X-LLM-Provider: openai         │
+    │   X-LLM-Model: gpt-4o            │
+    │   Accept: text/event-stream      │
+    ├─────────────────────────────────►│
+    │◄─────────────────────────────────┤
+    │   SSE stream or JSON response    │
+```
+
+### LLM Proxy Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LLMPROXY_HOST` | No | `0.0.0.0` | Host to bind to |
+| `LLMPROXY_PORT` | No | `9001` | Port to listen on |
+| `JWT_SECRET` | Yes | - | Shared secret with backend for JWT validation |
+| `OPENAI_API_KEY` | Yes* | - | OpenAI API key |
+| `OPENAI_DEFAULT_MODEL` | No | `gpt-4o` | Default model for OpenAI |
+
+*Required if using OpenAI provider
+
+### Backend Configuration (for Proxy)
+
+These variables configure what LLM settings the backend provides to agents:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LLMPROXY_ENDPOINT` | No | - | LLM Proxy endpoint URL |
+| `LLM_DEFAULT_PROVIDER` | No | `openai` | Default LLM provider |
+| `LLM_DEFAULT_MODEL` | No | `gpt-4o` | Default model |
+
+### Running with LLM Proxy
+
+1. Start all services:
+```bash
+# Terminal 1: Database
+make db-up
+
+# Terminal 2: Backend
+make migrate
+make run
+
+# Terminal 3: LLM Proxy
+export JWT_SECRET=your-shared-secret
+export OPENAI_API_KEY=sk-...
+make llmproxy
+```
+
+2. Agent receives LLM config from backend and uses proxy automatically.
+
+### Proxy API
+
+#### POST /v1/complete
+
+Request completion from an LLM provider.
+
+**Headers:**
+- `Authorization: Bearer <jwt>` - Agent JWT token (required)
+- `X-LLM-Provider: openai` - Provider name (required)
+- `X-LLM-Model: gpt-4o` - Model name (optional, uses provider default)
+- `Accept: text/event-stream` - For streaming (optional)
+
+**Request Body:**
+```json
+{
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant"},
+    {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+  ],
+  "tools": [
+    {
+      "name": "read",
+      "description": "Read a file",
+      "input_schema": {"type": "object", "properties": {...}}
+    }
+  ],
+  "max_tokens": 4096,
+  "temperature": 0.7
+}
+```
+
+**Response (non-streaming):**
+```json
+{
+  "content": [
+    {"type": "text", "text": "Hello! How can I help?"}
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 8
+  }
+}
+```
+
+**Response (streaming SSE):**
+```
+event: content_block_delta
+data: {"index":0,"type":"text","text":"Hello"}
+
+event: content_block_delta
+data: {"index":0,"type":"text","text":"!"}
+
+event: message_done
+data: {"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":8}}
+```
+
+### Provider Implementation
+
+The proxy supports multiple LLM providers through the `Provider` interface:
+
+```go
+type Provider interface {
+    Name() string
+    Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error)
+    CompleteStream(ctx context.Context, req *CompletionRequest) (<-chan StreamEvent, error)
+}
+```
+
+Currently implemented:
+- **OpenAI** (`internal/llmproxy/provider/openai.go`) - GPT-4o and other OpenAI models
+
+To add a new provider:
+1. Implement the `Provider` interface
+2. Register in `internal/llmproxy/provider/registry.go`
+
 ## Future Improvements
 
-- [ ] Streaming responses
+- [x] LLM Proxy for centralized API key management
+- [x] Streaming responses via SSE
 - [ ] WebSocket for real-time updates
-- [ ] Agent authentication (JWT middleware)
+- [x] Agent authentication (JWT middleware)
 - [ ] PostgreSQL repositories (currently in-memory)
 - [ ] Agent type-specific prompts and tool sets
 - [ ] Kubernetes deployment with job controller

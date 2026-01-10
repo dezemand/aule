@@ -25,7 +25,7 @@ type AgentConfig struct {
 	TaskAuthToken string
 	AgentEndpoint string
 
-	// LLM configuration
+	// LLM configuration (for standalone mode)
 	OpenAIAPIKey  string
 	OpenAIBaseURL string
 	OpenAIModel   string
@@ -61,7 +61,19 @@ func main() {
 }
 
 func runAgent(ctx context.Context, cfg *AgentConfig) error {
-	// Create LLM provider
+	// Standalone mode (for testing without backend)
+	if cfg.Standalone {
+		return runStandalone(ctx, cfg)
+	}
+
+	// Normal mode: connect to backend
+	return runWithBackend(ctx, cfg)
+}
+
+func runStandalone(ctx context.Context, cfg *AgentConfig) error {
+	logger.Info("Running in standalone mode")
+
+	// Create direct LLM provider (requires API key)
 	llmProvider := llm.NewOpenAIProvider(llm.OpenAIConfig{
 		BaseURL: cfg.OpenAIBaseURL,
 		APIKey:  cfg.OpenAIAPIKey,
@@ -80,18 +92,6 @@ func runAgent(ctx context.Context, cfg *AgentConfig) error {
 		Temperature:   0.0,
 		MaxTokens:     4096,
 	})
-
-	// Standalone mode (for testing without backend)
-	if cfg.Standalone {
-		return runStandalone(ctx, cfg, agentRunner)
-	}
-
-	// Normal mode: connect to backend
-	return runWithBackend(ctx, cfg, agentRunner)
-}
-
-func runStandalone(ctx context.Context, cfg *AgentConfig, agentRunner *runner.Runner) error {
-	logger.Info("Running in standalone mode")
 
 	// Read task prompt from stdin or use default
 	taskPrompt := "Explore this directory and describe what you find. List the main files and their purposes."
@@ -153,7 +153,7 @@ func runStandalone(ctx context.Context, cfg *AgentConfig, agentRunner *runner.Ru
 	return nil
 }
 
-func runWithBackend(ctx context.Context, cfg *AgentConfig, agentRunner *runner.Runner) error {
+func runWithBackend(ctx context.Context, cfg *AgentConfig) error {
 	logger.Info("Running with backend", "endpoint", cfg.AgentEndpoint, "taskID", cfg.TaskID)
 
 	// Create backend client
@@ -172,7 +172,55 @@ func runWithBackend(ctx context.Context, cfg *AgentConfig, agentRunner *runner.R
 		"tools", taskDetails.AllowedTools,
 	)
 
-	// 2. Start the task
+	// 2. Create LLM provider based on task details
+	var llmProvider llm.Provider
+
+	if taskDetails.LLMConfig != nil && taskDetails.LLMConfig.Endpoint != "" {
+		// Use proxy provider (normal mode)
+		logger.Info("Using LLM Proxy",
+			"endpoint", taskDetails.LLMConfig.Endpoint,
+			"provider", taskDetails.LLMConfig.Provider,
+			"model", taskDetails.LLMConfig.Model,
+		)
+		llmProvider = llm.NewProxyProvider(llm.ProxyConfig{
+			Endpoint:    taskDetails.LLMConfig.Endpoint,
+			AuthToken:   cfg.TaskAuthToken,
+			Provider:    taskDetails.LLMConfig.Provider,
+			Model:       taskDetails.LLMConfig.Model,
+			MaxTokens:   taskDetails.LLMConfig.MaxTokens,
+			Temperature: taskDetails.LLMConfig.Temperature,
+		})
+	} else {
+		// Fallback to direct OpenAI (if OPENAI_API_KEY is set)
+		if cfg.OpenAIAPIKey == "" {
+			return fmt.Errorf("no LLM configuration provided and OPENAI_API_KEY not set")
+		}
+		logger.Info("Using direct OpenAI provider (fallback)")
+		llmProvider = llm.NewOpenAIProvider(llm.OpenAIConfig{
+			BaseURL: cfg.OpenAIBaseURL,
+			APIKey:  cfg.OpenAIAPIKey,
+			Model:   cfg.OpenAIModel,
+		})
+	}
+
+	// 3. Create tool registry and runner
+	tools := tool.DefaultRegistry()
+
+	model := cfg.OpenAIModel
+	if taskDetails.LLMConfig != nil && taskDetails.LLMConfig.Model != "" {
+		model = taskDetails.LLMConfig.Model
+	}
+
+	agentRunner := runner.NewRunner(runner.Config{
+		Provider:      llmProvider,
+		Tools:         tools,
+		MaxIterations: cfg.MaxIterations,
+		Model:         model,
+		Temperature:   0.0,
+		MaxTokens:     4096,
+	})
+
+	// 4. Start the task
 	logger.Info("Starting task")
 	startResp, err := backendClient.StartTask(ctx, cfg.TaskID)
 	if err != nil {
@@ -182,7 +230,7 @@ func runWithBackend(ctx context.Context, cfg *AgentConfig, agentRunner *runner.R
 	instanceID := startResp.InstanceID
 	logger.Info("Task started", "instanceID", instanceID, "sessionID", startResp.SessionID)
 
-	// 3. Set up callbacks
+	// 5. Set up callbacks
 	agentRunner.SetCallbacks(
 		func(name string, input json.RawMessage) {
 			logger.Info("Tool call", "name", name)
@@ -231,7 +279,7 @@ func runWithBackend(ctx context.Context, cfg *AgentConfig, agentRunner *runner.R
 		},
 	)
 
-	// 4. Run the agent
+	// 6. Run the agent
 	workDir := taskDetails.WorkDir
 	if workDir == "" {
 		workDir = cfg.WorkDir
@@ -245,7 +293,7 @@ func runWithBackend(ctx context.Context, cfg *AgentConfig, agentRunner *runner.R
 		AllowedTools: taskDetails.AllowedTools,
 	})
 
-	// 5. Report result
+	// 7. Report result
 	if result.Success {
 		logger.Info("Task completed successfully")
 		err = backendClient.CompleteTask(ctx, cfg.TaskID, instanceID, &agentapi.TaskCompleteRequest{
@@ -283,7 +331,7 @@ func loadConfig() (*AgentConfig, error) {
 		TaskAuthToken: os.Getenv("TASK_AUTH_TOKEN"),
 		AgentEndpoint: os.Getenv("AGENT_ENDPOINT"),
 
-		// LLM config
+		// LLM config (for standalone mode)
 		OpenAIAPIKey:  os.Getenv("OPENAI_API_KEY"),
 		OpenAIBaseURL: os.Getenv("OPENAI_BASE_URL"),
 		OpenAIModel:   os.Getenv("OPENAI_MODEL"),
@@ -308,9 +356,11 @@ func loadConfig() (*AgentConfig, error) {
 		config.MaxIterations = 50
 	}
 
-	// Validate required config
-	if config.OpenAIAPIKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY environment variable is required")
+	// Validate required config for standalone mode
+	if config.Standalone {
+		if config.OpenAIAPIKey == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY environment variable is required in standalone mode")
+		}
 	}
 
 	// If not standalone, require backend config
@@ -319,6 +369,10 @@ func loadConfig() (*AgentConfig, error) {
 			// Default to standalone mode if no task ID
 			logger.Info("No TASK_ID provided, running in standalone mode")
 			config.Standalone = true
+			// Re-check standalone requirements
+			if config.OpenAIAPIKey == "" {
+				return nil, fmt.Errorf("OPENAI_API_KEY environment variable is required in standalone mode")
+			}
 		} else {
 			if config.AgentEndpoint == "" {
 				return nil, fmt.Errorf("AGENT_ENDPOINT environment variable is required when TASK_ID is set")

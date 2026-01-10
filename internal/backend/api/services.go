@@ -11,6 +11,13 @@ import (
 	projectsservice "github.com/dezemandje/aule/internal/service/project"
 )
 
+func getEnvDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
 type Services struct {
 	Events          eventhandler.EventHandler
 	Auth            *auth.AuthService
@@ -43,12 +50,22 @@ func setupServices(ctx *ApiContext) error {
 	// Get default work directory
 	workDir, _ := os.Getwd()
 
+	// Build agent API config with LLM proxy settings
+	agentCfg := agentapi.ServiceConfig{
+		DefaultWorkDir:   workDir,
+		LLMProxyEndpoint: os.Getenv("LLMPROXY_ENDPOINT"),
+		LLMProvider:      getEnvDefault("LLM_DEFAULT_PROVIDER", "openai"),
+		LLMModel:         getEnvDefault("LLM_DEFAULT_MODEL", "gpt-4o"),
+		LLMMaxTokens:     4096,
+		LLMTemperature:   0.0,
+	}
+
 	ctx.Services.AgentAPI = agentapi.NewService(
 		ctx.Services.Events,
 		taskRepo,
 		agentRepo,
 		logRepo,
-		workDir,
+		agentCfg,
 	)
 
 	return nil

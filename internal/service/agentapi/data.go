@@ -9,11 +9,21 @@ import (
 
 // TaskDetailsResponse is returned when agent fetches task details
 type TaskDetailsResponse struct {
-	Task         TaskInfo `json:"task"`
-	SystemPrompt string   `json:"system_prompt"`
-	Context      string   `json:"context"`
-	AllowedTools []string `json:"allowed_tools"`
-	WorkDir      string   `json:"work_dir"`
+	Task         TaskInfo   `json:"task"`
+	SystemPrompt string     `json:"system_prompt"`
+	Context      string     `json:"context"`
+	AllowedTools []string   `json:"allowed_tools"`
+	WorkDir      string     `json:"work_dir"`
+	LLMConfig    *LLMConfig `json:"llm_config,omitempty"`
+}
+
+// LLMConfig specifies how the agent should connect to the LLM
+type LLMConfig struct {
+	Endpoint    string  `json:"endpoint"`    // LLM Proxy endpoint URL
+	Provider    string  `json:"provider"`    // Provider name (e.g., "openai")
+	Model       string  `json:"model"`       // Model ID (e.g., "gpt-4o")
+	MaxTokens   int     `json:"max_tokens"`  // Max output tokens
+	Temperature float64 `json:"temperature"` // Temperature for sampling
 }
 
 // TaskInfo contains task information for the agent

@@ -10,9 +10,10 @@ Aule is a project management system that runs specialized agents to complete wor
 
 ### Backend
 ```bash
-make build          # Build all Go binaries (backend + migrate + agent)
+make build          # Build all Go binaries (backend + migrate + agent + llmproxy)
 make run            # Build and run the backend server
 make agent          # Run agent in standalone mode (requires OPENAI_API_KEY)
+make llmproxy       # Run LLM proxy server (requires OPENAI_API_KEY, JWT_SECRET)
 make migrate        # Run pending database migrations
 make migrate-down   # Rollback all migrations
 make db-up          # Start PostgreSQL via docker compose
@@ -89,10 +90,16 @@ Each service typically has:
 
 ### Agent System (`internal/agent/`)
 The agent binary (`cmd/agent/main.go`) executes tasks autonomously:
-- **LLM Provider** (`llm/`) - OpenAI-compatible API client
+- **LLM Provider** (`llm/`) - OpenAI-compatible API client or proxy client
 - **Tools** (`tool/`) - File operations (read, write, edit, glob, grep) and bash
 - **Runner** (`runner/`) - Agent loop that orchestrates LLM calls and tool execution
 - **Client** (`client/`) - HTTP client for backend API
+
+### LLM Proxy (`internal/llmproxy/`)
+Separate service that manages LLM API credentials (`cmd/llmproxy/main.go`):
+- **Provider** (`provider/`) - LLM provider implementations (OpenAI)
+- **API** (`api/`) - HTTP handlers with JWT auth and SSE streaming
+- Agents receive LLM config from backend and use proxy instead of direct API keys
 
 See `docs/agent.md` for full documentation.
 
