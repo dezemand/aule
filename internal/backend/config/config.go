@@ -18,12 +18,12 @@ type ServerConfig struct {
 	IdleTimeout  time.Duration
 }
 
-func NewConfigFromEnv() Config {
+func NewConfigFromEnv() (Config, error) {
 	return Config{
 		Server: NewServerConfigFromEnv(),
 		Auth:   NewAuthConfigFromEnv(),
 		DB:     NewDBConfigFromEnv(),
-	}
+	}, nil
 }
 
 func NewServerConfigFromEnv() ServerConfig {

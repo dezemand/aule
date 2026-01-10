@@ -10,8 +10,9 @@ Aule is a project management system that runs specialized agents to complete wor
 
 ### Backend
 ```bash
-make build          # Build all Go binaries (backend + migrate)
+make build          # Build all Go binaries (backend + migrate + agent)
 make run            # Build and run the backend server
+make agent          # Run agent in standalone mode (requires OPENAI_API_KEY)
 make migrate        # Run pending database migrations
 make migrate-down   # Rollback all migrations
 make db-up          # Start PostgreSQL via docker compose
@@ -77,13 +78,23 @@ Primary communication channel for UI. REST is only used for auth flows.
 Services are wired in `internal/backend/api/services.go`:
 - `auth.AuthService` - OAuth/JWT authentication
 - `project.Service` - Project CRUD
+- `agentapi.Service` - Agent task execution API
 - `wssubscriptions.Service` - WebSocket subscription management
 
 Each service typically has:
 - `repository.go` - Repository interface
 - `service.go` - Business logic
-- `ws.go` - WebSocket handlers
+- `ws.go` - WebSocket handlers (or `http.go` for REST)
 - `data.go` - Request/response types
+
+### Agent System (`internal/agent/`)
+The agent binary (`cmd/agent/main.go`) executes tasks autonomously:
+- **LLM Provider** (`llm/`) - OpenAI-compatible API client
+- **Tools** (`tool/`) - File operations (read, write, edit, glob, grep) and bash
+- **Runner** (`runner/`) - Agent loop that orchestrates LLM calls and tool execution
+- **Client** (`client/`) - HTTP client for backend API
+
+See `docs/agent.md` for full documentation.
 
 ### Database
 - PostgreSQL with migrations in `internal/database/migrations/`

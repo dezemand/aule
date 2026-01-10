@@ -1,9 +1,13 @@
 package api
 
 import (
+	"os"
+
 	"github.com/dezemandje/aule/internal/backend/auth"
 	wssubscriptions "github.com/dezemandje/aule/internal/backend/wsproto/subscriptions"
 	"github.com/dezemandje/aule/internal/eventhandler"
+	dbmemory "github.com/dezemandje/aule/internal/repository/memory"
+	"github.com/dezemandje/aule/internal/service/agentapi"
 	projectsservice "github.com/dezemandje/aule/internal/service/project"
 )
 
@@ -11,6 +15,7 @@ type Services struct {
 	Events          eventhandler.EventHandler
 	Auth            *auth.AuthService
 	Project         *projectsservice.Service
+	AgentAPI        *agentapi.Service
 	WsSubscriptions *wssubscriptions.Service
 }
 
@@ -28,6 +33,22 @@ func setupServices(ctx *ApiContext) error {
 	ctx.Services.Project = projectsservice.NewService(
 		ctx.Services.Events,
 		ctx.Data.ProjectRepository,
+	)
+
+	// Agent API service (using in-memory repos for now)
+	taskRepo := dbmemory.NewTaskRepository()
+	agentRepo := dbmemory.NewAgentInstanceRepository()
+	logRepo := dbmemory.NewAgentLogRepository()
+
+	// Get default work directory
+	workDir, _ := os.Getwd()
+
+	ctx.Services.AgentAPI = agentapi.NewService(
+		ctx.Services.Events,
+		taskRepo,
+		agentRepo,
+		logRepo,
+		workDir,
 	)
 
 	return nil

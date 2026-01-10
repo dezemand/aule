@@ -5,6 +5,7 @@ import (
 	"github.com/dezemandje/aule/internal/backend/wsproto"
 	wsidempotency "github.com/dezemandje/aule/internal/backend/wsproto/idempotency"
 	wssubscriptions "github.com/dezemandje/aule/internal/backend/wsproto/subscriptions"
+	"github.com/dezemandje/aule/internal/service/agentapi"
 	projectsservice "github.com/dezemandje/aule/internal/service/project"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/healthcheck"
@@ -45,7 +46,17 @@ func registerHttpRoutes(ctx *ApiContext) {
 	})
 
 	ctx.App.Route("/agent", func(r fiber.Router) {
-		// r.Use(authMw.RequireAgent)
+		r.Use(authMw.RequireAgent)
+		agentHandler := agentapi.NewHandler(ctx.Services.AgentAPI)
+
+		r.Route("/v1/tasks", func(r fiber.Router) {
+			r.Get("/:task_id", agentHandler.GetTask)
+			r.Post("/:task_id/start", agentHandler.StartTask)
+			r.Post("/:task_id/update", agentHandler.UpdateTask)
+			r.Post("/:task_id/complete", agentHandler.CompleteTask)
+			r.Post("/:task_id/fail", agentHandler.FailTask)
+		})
+
 		r.Get("/*", notFound)
 	})
 

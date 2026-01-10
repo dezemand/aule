@@ -26,6 +26,12 @@ type Task struct {
 	LeaseUntil *time.Time `json:"lease_until,omitempty"`
 	AttemptID  string     `json:"attempt_id,omitempty"`
 
+	// Agent execution context
+	Description  string   `json:"description,omitempty"`
+	Context      string   `json:"context,omitempty"`       // Additional context for the agent
+	SystemPrompt string   `json:"system_prompt,omitempty"` // Custom system prompt
+	AllowedTools []string `json:"allowed_tools,omitempty"` // Tools the agent can use
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
