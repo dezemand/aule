@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dezemandje/aule/internal/backend/auth"
+	"github.com/dezemandje/aule/internal/eventhandler"
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
@@ -23,6 +24,7 @@ type Handler struct {
 	router  *Router
 	mu      *sync.RWMutex
 	clients map[uuid.UUID]*Client
+	broker  eventhandler.Broker
 }
 
 func NewHandler(router *Router) *Handler {
@@ -117,6 +119,8 @@ func (h *Handler) handler() fiber.Handler {
 		})
 
 		go client.readLoop()
+
+		eventhandler.Emit(b)
 		h.router.onConnect(ctx, client)
 		defer h.router.onDisconnect(ctx, client)
 
