@@ -13,7 +13,6 @@ type ApiContext struct {
 	Services *Services
 
 	UserWsHandler *wsproto.Handler
-	UserWsRouter  *wsproto.Router
 
 	App *fiber.App
 }

@@ -1,0 +1,385 @@
+openapi: 3.0.3
+info:
+  title: Aule Agent API
+  version: 1.0.0
+  description: |
+    API for agent instances to interact with the Aule backend.
+    Agents use this API to fetch task details, report progress, and complete tasks.
+
+servers:
+  - url: /agent/v1
+
+security:
+  - bearerAuth: []
+
+paths:
+  /tasks/{task_id}:
+    get:
+      summary: Get task details
+      description: |
+        Retrieves detailed information about a task, including system prompt,
+        context, allowed tools, and LLM configuration.
+      operationId: getTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "200":
+          description: Task details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskDetailsResponse"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /tasks/{task_id}/start:
+    post:
+      summary: Start a task
+      description: |
+        Marks a task as started by the agent. Creates an agent instance
+        record and returns session information.
+      operationId: startTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "200":
+          description: Task started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskStartResponse"
+        "400":
+          description: Bad request (task already running or invalid state)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Task not found
+
+  /tasks/{task_id}/update:
+    post:
+      summary: Update task progress
+      description: |
+        Reports progress during task execution. Can include content updates,
+        tool calls, and token usage.
+      operationId: updateTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/InstanceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskUpdateRequest"
+      responses:
+        "200":
+          description: Update recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "401":
+          description: Unauthorized
+
+  /tasks/{task_id}/complete:
+    post:
+      summary: Complete a task
+      description: |
+        Marks a task as successfully completed. Includes the result
+        and final token usage.
+      operationId: completeTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/InstanceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCompleteRequest"
+      responses:
+        "200":
+          description: Task completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "401":
+          description: Unauthorized
+
+  /tasks/{task_id}/fail:
+    post:
+      summary: Fail a task
+      description: |
+        Marks a task as failed. Includes the error message and
+        token usage up to the failure point.
+      operationId: failTask
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/InstanceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskFailRequest"
+      responses:
+        "200":
+          description: Task marked as failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "401":
+          description: Unauthorized
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token issued to the agent
+
+  parameters:
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      description: UUID of the task
+      schema:
+        type: string
+        format: uuid
+
+    InstanceId:
+      name: instance_id
+      in: query
+      required: true
+      description: UUID of the agent instance (returned from /start)
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    APIResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        error:
+          type: string
+      required:
+        - success
+
+    TaskDetailsResponse:
+      type: object
+      properties:
+        task:
+          $ref: "#/components/schemas/TaskInfo"
+        system_prompt:
+          type: string
+          description: System prompt for the LLM
+        context:
+          type: string
+          description: Additional context for the task
+        allowed_tools:
+          type: array
+          items:
+            type: string
+          description: List of tool names the agent can use
+        work_dir:
+          type: string
+          description: Working directory for file operations
+        llm_config:
+          $ref: "#/components/schemas/LLMConfig"
+      required:
+        - task
+        - system_prompt
+        - allowed_tools
+        - work_dir
+
+    TaskInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          enum: [exploration, research, architecture, development, documentation, integration]
+        status:
+          type: string
+          enum: [ready, running, blocked, done, failed, cancelled]
+        priority:
+          type: integer
+        labels:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - project_id
+        - title
+        - type
+        - status
+        - created_at
+
+    LLMConfig:
+      type: object
+      description: Configuration for connecting to the LLM
+      properties:
+        endpoint:
+          type: string
+          format: uri
+          description: LLM Proxy endpoint URL
+        provider:
+          type: string
+          description: Provider name (e.g., "openai")
+        model:
+          type: string
+          description: Model ID (e.g., "gpt-4o")
+        max_tokens:
+          type: integer
+          description: Maximum output tokens
+        temperature:
+          type: number
+          format: float
+          description: Temperature for sampling
+      required:
+        - endpoint
+        - provider
+        - model
+
+    TaskStartResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        instance_id:
+          type: string
+          format: uuid
+        work_dir:
+          type: string
+        max_tokens:
+          type: integer
+        model:
+          type: string
+        temperature:
+          type: number
+          format: float
+      required:
+        - session_id
+        - instance_id
+        - work_dir
+
+    TaskUpdateRequest:
+      type: object
+      properties:
+        content:
+          type: string
+          description: Text content/output from the agent
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+        tokens_used:
+          $ref: "#/components/schemas/TokenUsage"
+
+    ToolCall:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique identifier for this tool call
+        name:
+          type: string
+          description: Tool name
+        input:
+          type: string
+          description: JSON-encoded input parameters
+        output:
+          type: string
+          description: Tool output
+        error:
+          type: string
+          description: Error message if tool failed
+      required:
+        - id
+        - name
+        - input
+        - output
+
+    TokenUsage:
+      type: object
+      properties:
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+      required:
+        - input_tokens
+        - output_tokens
+
+    TaskCompleteRequest:
+      type: object
+      properties:
+        result:
+          type: string
+          description: Final result/summary of the task
+        tokens_used:
+          $ref: "#/components/schemas/TokenUsage"
+      required:
+        - result
+        - tokens_used
+
+    TaskFailRequest:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message describing the failure
+        tokens_used:
+          $ref: "#/components/schemas/TokenUsage"
+      required:
+        - error

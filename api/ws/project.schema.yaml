@@ -1,0 +1,740 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Project Messages
+description: WebSocket messages for project operations
+
+definitions:
+  # ============================================================================
+  # Domain Types
+  # ============================================================================
+
+  ProjectStatus:
+    type: string
+    enum: [active, paused, archived]
+    description: Project lifecycle status
+
+  ProjectPurpose:
+    type: object
+    description: Defines why the project exists (Section 2)
+    properties:
+      goal:
+        type: string
+        description: What success looks like
+      problem_statement:
+        type: string
+        description: What problem this project is trying to solve
+      non_goals:
+        type: array
+        items:
+          type: string
+        description: Explicit exclusions (critical for autonomy)
+      expected_value:
+        type: string
+        description: Technical, organisational, learning, strategic
+      time_horizon:
+        type: string
+        description: Short-lived experiment vs long-running initiative
+
+  ProjectScope:
+    type: object
+    description: Defines the boundaries of the project (Section 3)
+    properties:
+      in_scope:
+        type: array
+        items:
+          type: string
+        description: Systems, teams, processes, technologies in scope
+      out_of_scope:
+        type: array
+        items:
+          type: string
+        description: Explicitly out of scope
+      assumptions:
+        type: array
+        items:
+          type: string
+        description: Things taken as given
+      constraints:
+        type: array
+        items:
+          type: string
+        description: Budget, time, people, regulations
+
+  ProjectGovernance:
+    type: object
+    description: Controls how autonomous agents are allowed to be (Section 5)
+    properties:
+      autonomy_level:
+        type: string
+        enum: [assistive, supervised, autonomous, overnight-autonomous]
+        description: Level of agent autonomy
+      human_in_the_loop:
+        type: array
+        items:
+          type: string
+        description: Stages requiring human approval
+      review_strictness:
+        type: string
+        enum: [light, normal, strict]
+        description: Review requirements
+      decision_authority:
+        type: string
+        enum: [propose, decide]
+        description: Can agents make decisions or only propose?
+      escalation_rules:
+        type: array
+        items:
+          type: string
+        description: When and how humans are notified
+
+  ProjectTaskConfig:
+    type: object
+    description: Defines how work flows inside the project (Section 6)
+    properties:
+      allowed_task_types:
+        type: array
+        items:
+          type: string
+        description: Which task types are valid in this project
+      custom_stage_overrides:
+        type: object
+        additionalProperties: true
+        description: Custom stage configurations per task type
+      default_priorities:
+        type: object
+        additionalProperties:
+          type: string
+        description: Default priority per task type
+      wip_limits:
+        type: object
+        additionalProperties:
+          type: integer
+        description: Work-in-progress limits
+
+  ProjectAgentConfig:
+    type: object
+    description: Defines which agents may operate (Section 7)
+    properties:
+      allowed_agent_types:
+        type: array
+        items:
+          type: string
+        description: Which agent types are allowed
+      trust_level:
+        type: string
+        enum: [experimental, operational, trusted]
+        description: Agent trust level
+      runtime_permissions:
+        type: array
+        items:
+          type: string
+        description: Allowed runtimes (Go-only, Python allowed, etc.)
+      max_parallel_agents:
+        type: integer
+        description: Maximum concurrent agents
+      budget_limits:
+        type: object
+        additionalProperties: true
+        description: Time, cost, tool usage limits
+
+  Project:
+    type: object
+    description: A project is the top-level context boundary for work
+    properties:
+      id:
+        type: string
+        format: uuid
+      key:
+        type: string
+        description: Short, human-friendly identifier
+      name:
+        type: string
+      description:
+        type: string
+      status:
+        $ref: "#/definitions/ProjectStatus"
+      purpose:
+        $ref: "#/definitions/ProjectPurpose"
+      scope:
+        $ref: "#/definitions/ProjectScope"
+      governance:
+        $ref: "#/definitions/ProjectGovernance"
+      task_config:
+        $ref: "#/definitions/ProjectTaskConfig"
+      agent_config:
+        $ref: "#/definitions/ProjectAgentConfig"
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+    required:
+      - id
+      - key
+      - name
+      - status
+      - created_at
+      - updated_at
+
+  # Project Members
+  ProjectMemberRole:
+    type: string
+    enum: [owner, admin, contributor, reviewer, viewer]
+    description: Member role in the project
+
+  ProjectMemberPermissions:
+    type: object
+    description: Granular permissions for a member
+    properties:
+      can_edit_project:
+        type: boolean
+      can_manage_members:
+        type: boolean
+      can_create_tasks:
+        type: boolean
+      can_run_agents:
+        type: boolean
+      can_approve_changes:
+        type: boolean
+
+  ProjectMember:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      project_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      role:
+        $ref: "#/definitions/ProjectMemberRole"
+      permissions:
+        $ref: "#/definitions/ProjectMemberPermissions"
+      created_at:
+        type: string
+        format: date-time
+    required:
+      - id
+      - project_id
+      - user_id
+      - role
+      - created_at
+
+  # Project Repositories (Artefact Attachments)
+  AllowedPaths:
+    type: object
+    properties:
+      read:
+        type: array
+        items:
+          type: string
+      write:
+        type: array
+        items:
+          type: string
+
+  ProjectRepository:
+    type: object
+    description: Git repository attached to a project (Section 8)
+    properties:
+      id:
+        type: string
+        format: uuid
+      project_id:
+        type: string
+        format: uuid
+      url:
+        type: string
+        description: Repository URL
+      purpose:
+        type: string
+        enum: [code, docs, infra, examples]
+        description: Repository purpose
+      default_branch:
+        type: string
+      allowed_paths:
+        $ref: "#/definitions/AllowedPaths"
+      branch_naming_convention:
+        type: string
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+    required:
+      - id
+      - project_id
+      - url
+      - purpose
+      - default_branch
+      - created_at
+      - updated_at
+
+  ProjectWikiSpace:
+    type: object
+    description: Wiki space attached to a project (Section 8)
+    properties:
+      id:
+        type: string
+        format: uuid
+      project_id:
+        type: string
+        format: uuid
+      space_id:
+        type: string
+      access_mode:
+        type: string
+        enum: [read, write]
+      page_prefixes:
+        type: array
+        items:
+          type: string
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+    required:
+      - id
+      - project_id
+      - space_id
+      - access_mode
+      - created_at
+      - updated_at
+
+  # ============================================================================
+  # Project CRUD Messages
+  # ============================================================================
+
+  ProjectsListRequest:
+    type: object
+    description: "Message type: projects.list.req - Request list of projects for current user"
+    properties: {}
+
+  ProjectsListResponse:
+    type: object
+    description: "Message type: projects.list - List of projects"
+    properties:
+      projects:
+        type: array
+        items:
+          $ref: "#/definitions/Project"
+    required:
+      - projects
+
+  ProjectCreateRequest:
+    type: object
+    description: "Message type: projects.create.req - Create a new project"
+    properties:
+      name:
+        type: string
+        description: Project name
+      description:
+        type: string
+        description: Project description (optional)
+    required:
+      - name
+
+  ProjectCreatedResponse:
+    type: object
+    description: "Message type: projects.created - Project creation result"
+    properties:
+      project:
+        $ref: "#/definitions/Project"
+    required:
+      - project
+
+  ProjectUpdateRequest:
+    type: object
+    description: "Message type: projects.update.req - Update an existing project"
+    properties:
+      id:
+        type: string
+        format: uuid
+        description: Project ID to update
+      name:
+        type: string
+        description: New project name
+      description:
+        type: string
+        description: New project description
+      status:
+        $ref: "#/definitions/ProjectStatus"
+      purpose:
+        $ref: "#/definitions/ProjectPurpose"
+      scope:
+        $ref: "#/definitions/ProjectScope"
+      governance:
+        $ref: "#/definitions/ProjectGovernance"
+      task_config:
+        $ref: "#/definitions/ProjectTaskConfig"
+      agent_config:
+        $ref: "#/definitions/ProjectAgentConfig"
+    required:
+      - id
+
+  ProjectUpdatedResponse:
+    type: object
+    description: "Message type: projects.updated - Project update result"
+    properties:
+      project:
+        $ref: "#/definitions/Project"
+    required:
+      - project
+
+  ProjectDeleteRequest:
+    type: object
+    description: "Message type: projects.delete.req - Delete a project"
+    properties:
+      id:
+        type: string
+        format: uuid
+        description: Project ID to delete
+    required:
+      - id
+
+  ProjectDeletedResponse:
+    type: object
+    description: "Message type: projects.deleted - Project deletion result"
+    properties:
+      id:
+        type: string
+        format: uuid
+        description: Deleted project ID
+    required:
+      - id
+
+  ProjectGetRequest:
+    type: object
+    description: "Message type: projects.get.req - Get a single project"
+    properties:
+      id:
+        type: string
+        format: uuid
+        description: Project ID to retrieve
+    required:
+      - id
+
+  ProjectResponse:
+    type: object
+    description: "Message type: projects.get - Single project"
+    properties:
+      project:
+        $ref: "#/definitions/Project"
+    required:
+      - project
+
+  # ============================================================================
+  # Member Management Messages
+  # ============================================================================
+
+  MembersListRequest:
+    type: object
+    description: "Message type: projects.members.list.req - List project members"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+    required:
+      - project_id
+
+  MembersListResponse:
+    type: object
+    description: "Message type: projects.members.list - List of project members"
+    properties:
+      members:
+        type: array
+        items:
+          $ref: "#/definitions/ProjectMember"
+    required:
+      - members
+
+  MemberAddRequest:
+    type: object
+    description: "Message type: projects.members.add.req - Add a member to a project"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      role:
+        $ref: "#/definitions/ProjectMemberRole"
+      permissions:
+        $ref: "#/definitions/ProjectMemberPermissions"
+    required:
+      - project_id
+      - user_id
+      - role
+
+  MemberAddedResponse:
+    type: object
+    description: "Message type: projects.members.added - Member added result"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+    required:
+      - project_id
+      - user_id
+
+  MemberUpdateRequest:
+    type: object
+    description: "Message type: projects.members.update.req - Update a member's role"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      role:
+        $ref: "#/definitions/ProjectMemberRole"
+      permissions:
+        $ref: "#/definitions/ProjectMemberPermissions"
+    required:
+      - project_id
+      - user_id
+      - role
+
+  MemberUpdatedResponse:
+    type: object
+    description: "Message type: projects.members.updated - Member updated result"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+    required:
+      - project_id
+      - user_id
+
+  MemberRemoveRequest:
+    type: object
+    description: "Message type: projects.members.remove.req - Remove a member"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+    required:
+      - project_id
+      - user_id
+
+  MemberRemovedResponse:
+    type: object
+    description: "Message type: projects.members.removed - Member removed result"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+    required:
+      - project_id
+      - user_id
+
+  # ============================================================================
+  # Repository Management Messages
+  # ============================================================================
+
+  ReposListRequest:
+    type: object
+    description: "Message type: projects.repos.list.req - List project repositories"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+    required:
+      - project_id
+
+  ReposListResponse:
+    type: object
+    description: "Message type: projects.repos.list - List of repositories"
+    properties:
+      repositories:
+        type: array
+        items:
+          $ref: "#/definitions/ProjectRepository"
+    required:
+      - repositories
+
+  RepoAddRequest:
+    type: object
+    description: "Message type: projects.repos.add.req - Add a repository"
+    properties:
+      project_id:
+        type: string
+        format: uuid
+      url:
+        type: string
+      purpose:
+        type: string
+        enum: [code, docs, infra, examples]
+      default_branch:
+        type: string
+      allowed_paths:
+        $ref: "#/definitions/AllowedPaths"
+      branch_naming_convention:
+        type: string
+    required:
+      - project_id
+      - url
+      - purpose
+
+  RepoAddedResponse:
+    type: object
+    description: "Message type: projects.repos.added - Repository added result"
+    properties:
+      repository:
+        $ref: "#/definitions/ProjectRepository"
+    required:
+      - repository
+
+  RepoUpdateRequest:
+    type: object
+    description: "Message type: projects.repos.update.req - Update a repository"
+    properties:
+      id:
+        type: string
+        format: uuid
+      purpose:
+        type: string
+        enum: [code, docs, infra, examples]
+      default_branch:
+        type: string
+      allowed_paths:
+        $ref: "#/definitions/AllowedPaths"
+      branch_naming_convention:
+        type: string
+    required:
+      - id
+
+  RepoUpdatedResponse:
+    type: object
+    description: "Message type: projects.repos.updated - Repository updated result"
+    properties:
+      repository:
+        $ref: "#/definitions/ProjectRepository"
+    required:
+      - repository
+
+  RepoRemoveRequest:
+    type: object
+    description: "Message type: projects.repos.remove.req - Remove a repository"
+    properties:
+      id:
+        type: string
+        format: uuid
+    required:
+      - id
+
+  RepoRemovedResponse:
+    type: object
+    description: "Message type: projects.repos.removed - Repository removed result"
+    properties:
+      id:
+        type: string
+        format: uuid
+    required:
+      - id
+
+# Message type reference
+messageTypes:
+  # Project CRUD
+  projects.list.req:
+    payload: { $ref: "#/definitions/ProjectsListRequest" }
+    direction: client-to-server
+  projects.list:
+    payload: { $ref: "#/definitions/ProjectsListResponse" }
+    direction: server-to-client
+  projects.create.req:
+    payload: { $ref: "#/definitions/ProjectCreateRequest" }
+    direction: client-to-server
+  projects.created:
+    payload: { $ref: "#/definitions/ProjectCreatedResponse" }
+    direction: server-to-client
+  projects.update.req:
+    payload: { $ref: "#/definitions/ProjectUpdateRequest" }
+    direction: client-to-server
+  projects.updated:
+    payload: { $ref: "#/definitions/ProjectUpdatedResponse" }
+    direction: server-to-client
+  projects.delete.req:
+    payload: { $ref: "#/definitions/ProjectDeleteRequest" }
+    direction: client-to-server
+  projects.deleted:
+    payload: { $ref: "#/definitions/ProjectDeletedResponse" }
+    direction: server-to-client
+  projects.get.req:
+    payload: { $ref: "#/definitions/ProjectGetRequest" }
+    direction: client-to-server
+  projects.get:
+    payload: { $ref: "#/definitions/ProjectResponse" }
+    direction: server-to-client
+
+  # Member management
+  projects.members.list.req:
+    payload: { $ref: "#/definitions/MembersListRequest" }
+    direction: client-to-server
+  projects.members.list:
+    payload: { $ref: "#/definitions/MembersListResponse" }
+    direction: server-to-client
+  projects.members.add.req:
+    payload: { $ref: "#/definitions/MemberAddRequest" }
+    direction: client-to-server
+  projects.members.added:
+    payload: { $ref: "#/definitions/MemberAddedResponse" }
+    direction: server-to-client
+  projects.members.update.req:
+    payload: { $ref: "#/definitions/MemberUpdateRequest" }
+    direction: client-to-server
+  projects.members.updated:
+    payload: { $ref: "#/definitions/MemberUpdatedResponse" }
+    direction: server-to-client
+  projects.members.remove.req:
+    payload: { $ref: "#/definitions/MemberRemoveRequest" }
+    direction: client-to-server
+  projects.members.removed:
+    payload: { $ref: "#/definitions/MemberRemovedResponse" }
+    direction: server-to-client
+
+  # Repository management
+  projects.repos.list.req:
+    payload: { $ref: "#/definitions/ReposListRequest" }
+    direction: client-to-server
+  projects.repos.list:
+    payload: { $ref: "#/definitions/ReposListResponse" }
+    direction: server-to-client
+  projects.repos.add.req:
+    payload: { $ref: "#/definitions/RepoAddRequest" }
+    direction: client-to-server
+  projects.repos.added:
+    payload: { $ref: "#/definitions/RepoAddedResponse" }
+    direction: server-to-client
+  projects.repos.update.req:
+    payload: { $ref: "#/definitions/RepoUpdateRequest" }
+    direction: client-to-server
+  projects.repos.updated:
+    payload: { $ref: "#/definitions/RepoUpdatedResponse" }
+    direction: server-to-client
+  projects.repos.remove.req:
+    payload: { $ref: "#/definitions/RepoRemoveRequest" }
+    direction: client-to-server
+  projects.repos.removed:
+    payload: { $ref: "#/definitions/RepoRemovedResponse" }
+    direction: server-to-client

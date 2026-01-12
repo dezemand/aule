@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"time"
@@ -41,7 +42,7 @@ func (r *postgresRefreshTokenRepository) Find(token string) (domain.UserID, erro
 	`
 
 	var userID uuid.UUID
-	err := r.db.QueryRow(query, token).Scan(&userID)
+	err := r.db.QueryRowContext(context.Background(), query, token).Scan(&userID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.UserID(uuid.Nil), repository.ErrNotFound

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 
@@ -32,7 +33,7 @@ func (r *postgresUserRepository) Create(user *domain.User) (*domain.UserID, erro
 	`
 
 	var idStr string
-	err := r.db.QueryRow(query, user.Email, user.Name).Scan(&idStr)
+	err := r.db.QueryRowContext(context.Background(), query, user.Email, user.Name).Scan(&idStr)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +82,7 @@ func (r *postgresUserRepository) FindByIdentity(provider string, sub string) (*d
 	var id uuid.UUID
 	var email, name sql.NullString
 
-	err := r.db.QueryRow(query, provider, sub).Scan(&id, &email, &name)
+	err := r.db.QueryRowContext(context.Background(), query, provider, sub).Scan(&id, &email, &name)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, repository.ErrNotFound

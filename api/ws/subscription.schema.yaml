@@ -1,0 +1,94 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Subscription Messages
+description: WebSocket subscription lifecycle messages
+
+definitions:
+  # Subscription messages
+  SubscribeRequest:
+    type: object
+    description: "Message type: subscription.subscribe.req"
+    properties:
+      topic:
+        type: string
+        description: Subscription topic (e.g., "projects.list", "projects.detail")
+      query:
+        description: Topic-specific query parameters (optional)
+        oneOf:
+          - $ref: "#/definitions/ProjectsDetailQuery"
+          - $ref: "#/definitions/ProjectsMembersQuery"
+          - type: object
+      initial:
+        type: boolean
+        description: Whether to send initial data immediately
+    required:
+      - topic
+
+  # Subscription query types
+  ProjectsDetailQuery:
+    type: object
+    description: Query parameters for projects.detail subscription
+    properties:
+      project_id:
+        type: string
+        format: uuid
+        description: ID of the project to subscribe to
+    required:
+      - project_id
+
+  ProjectsMembersQuery:
+    type: object
+    description: Query parameters for projects.members subscription
+    properties:
+      project_id:
+        type: string
+        format: uuid
+        description: ID of the project to get members for
+    required:
+      - project_id
+
+  SubscribeAck:
+    type: object
+    description: "Message type: subscription.subscribe.ack"
+    properties:
+      subscription_id:
+        type: string
+        format: uuid
+        description: ID of the created subscription
+    required:
+      - subscription_id
+
+  UnsubscribeRequest:
+    type: object
+    description: "Message type: subscription.unsubscribe.req"
+    properties:
+      subscription_id:
+        type: string
+        format: uuid
+        description: ID of the subscription to cancel
+    required:
+      - subscription_id
+
+  UnsubscribeAck:
+    type: object
+    description: "Message type: subscription.unsubscribe.ack"
+    properties:
+      subscription_id:
+        type: string
+        format: uuid
+        description: ID of the cancelled subscription
+    required:
+      - subscription_id
+
+messageTypes:
+  subscription.subscribe.req:
+    payload: { $ref: "#/definitions/SubscribeRequest" }
+    direction: client-to-server
+  subscription.subscribe.ack:
+    payload: { $ref: "#/definitions/SubscribeAck" }
+    direction: server-to-client
+  subscription.unsubscribe.req:
+    payload: { $ref: "#/definitions/UnsubscribeRequest" }
+    direction: client-to-server
+  subscription.unsubscribe.ack:
+    payload: { $ref: "#/definitions/UnsubscribeAck" }
+    direction: server-to-client

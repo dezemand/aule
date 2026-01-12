@@ -1,0 +1,127 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: Aule WebSocket Messages
+description: |
+  JSON Schema definitions for WebSocket message types.
+
+  This is the main schema file that aggregates definitions from:
+  - subscription.schema.yaml - Subscription lifecycle messages
+  - project.schema.yaml - Project CRUD and management messages
+
+definitions:
+  # ============================================================================
+  # Core Message Structure
+  # ============================================================================
+
+  Envelope:
+    type: object
+    description: Wire format for all WebSocket messages
+    properties:
+      type:
+        type: string
+        description: Message type identifier
+      id:
+        type: string
+        format: uuid
+        description: Unique message ID
+      reply_to:
+        type: string
+        format: uuid
+        description: ID of the message this is replying to (optional)
+      idempotency_key:
+        type: string
+        description: Client-provided key for idempotent operations (optional)
+      subscription_id:
+        type: string
+        format: uuid
+        description: Subscription ID for subscription-related messages (optional)
+      seq:
+        type: integer
+        description: Sequence number for ordering
+      time:
+        type: string
+        format: date-time
+        description: Message timestamp (ISO 8601)
+      payload:
+        description: Message-specific payload
+    required:
+      - type
+      - id
+      - time
+
+  ErrorPayload:
+    type: object
+    description: Standard error response payload
+    properties:
+      code:
+        type: string
+        description: Error code
+      message:
+        type: string
+        description: Human-readable error message
+      detail:
+        description: Additional error details (optional)
+    required:
+      - code
+      - message
+
+  # ============================================================================
+  # Imported Definitions
+  # ============================================================================
+  #
+  # Subscription messages: see subscription.schema.yaml
+  # - SubscribeRequest, SubscribeAck, UnsubscribeRequest, UnsubscribeAck
+  #
+  # Project messages: see project.schema.yaml
+  # - Project, ProjectStatus, ProjectPurpose, ProjectScope, etc.
+  # - ProjectsListRequest, ProjectCreateRequest, ProjectUpdateRequest, etc.
+  # - MembersListRequest, MemberAddRequest, etc.
+  # - ReposListRequest, RepoAddRequest, etc.
+
+# ============================================================================
+# Message Type Index
+# ============================================================================
+# All message types are defined in their respective schema files.
+# This section provides a quick reference.
+
+messageTypes:
+  # Error
+  error:
+    payload: { $ref: "#/definitions/ErrorPayload" }
+    direction: server-to-client
+
+  # Connection lifecycle
+  connection.close:
+    payload: {}
+    direction: server-to-client
+    description: Server requests client to disconnect (e.g., token expired)
+# ============================================================================
+# Schema File References
+# ============================================================================
+#
+# The following schema files contain additional definitions:
+#
+# subscription.schema.yaml:
+#   - subscription.subscribe.req
+#   - subscription.subscribe.ack
+#   - subscription.unsubscribe.req
+#   - subscription.unsubscribe.ack
+#
+# project.schema.yaml:
+#   Project CRUD:
+#   - projects.list.req / projects.list
+#   - projects.create.req / projects.created
+#   - projects.update.req / projects.updated
+#   - projects.delete.req / projects.deleted
+#   - projects.get.req / projects.get
+#
+#   Member management:
+#   - projects.members.list.req / projects.members.list
+#   - projects.members.add.req / projects.members.added
+#   - projects.members.update.req / projects.members.updated
+#   - projects.members.remove.req / projects.members.removed
+#
+#   Repository management:
+#   - projects.repos.list.req / projects.repos.list
+#   - projects.repos.add.req / projects.repos.added
+#   - projects.repos.update.req / projects.repos.updated
+#   - projects.repos.remove.req / projects.repos.removed

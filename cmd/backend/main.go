@@ -43,6 +43,8 @@ func main() {
 		cancel()
 	}()
 
+	api.Services.Events.Start()
+
 	err = api.Start()
 	if err != nil {
 		logger.Error("Failed starting application", "err", err)

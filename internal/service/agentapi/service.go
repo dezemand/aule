@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/dezemandje/aule/internal/domain"
-	"github.com/dezemandje/aule/internal/eventhandler"
+	"github.com/dezemandje/aule/internal/event"
 	"github.com/google/uuid"
 )
 
@@ -24,7 +24,7 @@ const (
 
 // Service handles agent API operations
 type Service struct {
-	eventHandler   eventhandler.EventHandler
+	bus            *event.Bus
 	taskRepo       TaskRepository
 	agentRepo      AgentInstanceRepository
 	logRepo        AgentLogRepository
@@ -44,7 +44,7 @@ type ServiceConfig struct {
 
 // NewService creates a new agent API service
 func NewService(
-	eventHandler eventhandler.EventHandler,
+	bus *event.Bus,
 	taskRepo TaskRepository,
 	agentRepo AgentInstanceRepository,
 	logRepo AgentLogRepository,
@@ -72,7 +72,7 @@ func NewService(
 	}
 
 	return &Service{
-		eventHandler:   eventHandler,
+		bus:            bus,
 		taskRepo:       taskRepo,
 		agentRepo:      agentRepo,
 		logRepo:        logRepo,

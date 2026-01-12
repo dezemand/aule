@@ -36,5 +36,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *.gen.ts
 *.gen.js
 src/model/api/
+src/model/ws/
 
 .tanstack/tmp

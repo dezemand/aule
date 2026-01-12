@@ -3,17 +3,18 @@ package wsidempotency
 import (
 	"time"
 
-	"github.com/dezemandje/aule/internal/backend/wsproto"
+	modelsws "github.com/dezemandje/aule/internal/model/ws"
 	"github.com/google/uuid"
 )
 
+// IdempotencyEntry stores the state and response messages for an idempotent request.
 type IdempotencyEntry struct {
-	Created  time.Time           `json:"created"`
-	State    CtxState            `json:"state"`
-	Messages []*wsproto.Envelope `json:"messages"`
+	Created  time.Time            `json:"created"`
+	State    CtxState             `json:"state"`
+	Messages []*modelsws.Envelope `json:"messages"`
 }
 
-// IdempotencyStore is an interface for storing idempotency state.
+// IdempotencyStore stores idempotency state.
 type IdempotencyStore interface {
 	Get(clientID uuid.UUID, key string, after time.Time) (*IdempotencyEntry, bool)
 	Set(clientID uuid.UUID, key string, entry *IdempotencyEntry)
@@ -41,6 +42,7 @@ func (m *memoryStore) Set(clientID uuid.UUID, key string, entry *IdempotencyEntr
 	m.store[memKey(clientID, key)] = entry
 }
 
+// NewMemoryStore creates an in-memory idempotency store.
 func NewMemoryStore() IdempotencyStore {
 	return &memoryStore{
 		store: make(map[string]*IdempotencyEntry),

@@ -1,7 +1,7 @@
 import { jsonCodec } from "@/lib/utils";
-import z from "zod";
 import { v4 as uuid } from "uuid";
 import { MessageReceipt } from "./message";
+import { envelopeSchema, type Envelope as EnvelopeSchema } from "@/model/ws";
 
 export type ConnectionState =
   | "disconnected"
@@ -9,22 +9,13 @@ export type ConnectionState =
   | "connected"
   | "reconnecting";
 
-const envelopeSchema = jsonCodec(
-  z.object({
-    type: z.string(),
-    id: z.uuid(),
-    reply_to: z.uuid().optional(),
-    idempotency_key: z.string().optional(),
-    subscription_id: z.uuid().optional(),
-    seq: z.number().optional(),
-    time: z.iso.datetime(),
-    payload: z.unknown().optional(),
-  }),
-);
-
-export type EnvelopeSchema = z.infer<typeof envelopeSchema>;
-export type Envelope<T> = Omit<EnvelopeSchema, "payload"> & {
-  payload: T;
+const envelopeCodec = jsonCodec(envelopeSchema);
+export type Envelope<TType extends string = string, TPayload = unknown> = Omit<
+  EnvelopeSchema,
+  "payload" | "type"
+> & {
+  type: TType;
+  payload: TPayload;
 };
 
 export interface EnvelopeError {
@@ -192,7 +183,7 @@ export class WebSocketClient {
       envelope.reply_to = replyTo;
     }
 
-    const json = envelopeSchema.encode(envelope);
+    const json = envelopeCodec.encode(envelope);
     this.ws!.send(json);
 
     return new MessageReceipt(this, envelope.id);
@@ -218,7 +209,7 @@ export class WebSocketClient {
 
     this.ws.onmessage = (event) => {
       try {
-        const envelope = envelopeSchema.decode(event.data);
+        const envelope = envelopeCodec.decode(event.data);
         this.handleMessage(envelope);
       } catch (error) {
         console.error("Failed to parse WebSocket message:", error);

@@ -3,10 +3,11 @@ package wsidempotency
 import (
 	"time"
 
-	"github.com/dezemandje/aule/internal/backend/wsproto"
+	modelsws "github.com/dezemandje/aule/internal/model/ws"
 	"github.com/google/uuid"
 )
 
+// CtxState represents the state of an idempotent request.
 type CtxState int
 
 const (
@@ -20,8 +21,7 @@ type idempotencyCtx struct {
 	key      string
 	created  time.Time
 	state    CtxState
-	messages *[]*wsproto.Envelope
-
+	messages *[]*modelsws.Envelope
 	commitFn func()
 }
 

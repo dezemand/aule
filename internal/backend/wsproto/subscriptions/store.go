@@ -1,6 +1,8 @@
 package wssubscriptions
 
 import (
+	"sync"
+
 	"github.com/dezemandje/aule/internal/backend/wsproto"
 	"github.com/dezemandje/aule/internal/domain"
 	"github.com/google/uuid"
@@ -62,17 +64,22 @@ type Store interface {
 }
 
 type memStore struct {
+	mu   sync.RWMutex
 	subs map[uuid.UUID]Subscription
 }
 
 func (m *memStore) Add(sub Subscription) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.subs[sub.ID()] = sub
 	return nil
 }
 
 func (m *memStore) Find(topic string, cond func(Subscription) bool) ([]Subscription, error) {
-	var results []Subscription
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
+	var results []Subscription
 	for _, sub := range m.subs {
 		if sub.Topic() == topic && cond(sub) {
 			results = append(results, sub)
@@ -83,11 +90,16 @@ func (m *memStore) Find(topic string, cond func(Subscription) bool) ([]Subscript
 }
 
 func (m *memStore) Remove(clientID uuid.UUID, subscriptionID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.subs, subscriptionID)
 	return nil
 }
 
 func (m *memStore) RemoveAll(clientID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for id, sub := range m.subs {
 		if sub.ClientID() == clientID {
 			delete(m.subs, id)

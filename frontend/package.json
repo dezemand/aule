@@ -10,7 +10,9 @@
     "start": "NODE_ENV=production bun src/index.tsx",
     "build": "bun run build.ts",
     "generate-routes": "tsr generate",
-    "watch-routes": "tsr watch"
+    "watch-routes": "tsr watch",
+    "generate-ws-schemas": "bun run scripts/generate-ws-schemas.ts",
+    "generate": "bun run generate-routes && bun run generate-ws-schemas"
   },
   "dependencies": {
     "@hookform/resolvers": "^4.1.0",
@@ -43,6 +45,8 @@
     "@types/bun": "latest",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "orval": "^7.17.2"
+    "json-schema-to-zod": "^2.7.0",
+    "orval": "^7.17.2",
+    "yaml": "^2.8.2"
   }
 }

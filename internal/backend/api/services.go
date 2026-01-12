@@ -5,7 +5,8 @@ import (
 
 	"github.com/dezemandje/aule/internal/backend/auth"
 	wssubscriptions "github.com/dezemandje/aule/internal/backend/wsproto/subscriptions"
-	"github.com/dezemandje/aule/internal/eventhandler"
+	"github.com/dezemandje/aule/internal/event"
+	"github.com/dezemandje/aule/internal/log"
 	dbmemory "github.com/dezemandje/aule/internal/repository/memory"
 	"github.com/dezemandje/aule/internal/service/agentapi"
 	projectsservice "github.com/dezemandje/aule/internal/service/project"
@@ -19,7 +20,7 @@ func getEnvDefault(key, defaultValue string) string {
 }
 
 type Services struct {
-	Events          eventhandler.EventHandler
+	Events          *event.Bus
 	Auth            *auth.AuthService
 	Project         *projectsservice.Service
 	AgentAPI        *agentapi.Service
@@ -29,8 +30,12 @@ type Services struct {
 func setupServices(ctx *ApiContext) error {
 	ctx.Services = &Services{}
 
-	ctx.Services.WsSubscriptions = wssubscriptions.NewService(wssubscriptions.NewMemStore())
-	ctx.Services.Events = eventhandler.NewMemoryEventHandler()
+	ctx.Services.Events = event.NewBus(
+		event.WithBufferSize(1024),
+		event.WithLogger(log.GetLogger("bus")),
+	)
+
+	ctx.Services.WsSubscriptions = wssubscriptions.NewService(ctx.Services.Events, wssubscriptions.NewMemStore())
 	ctx.Services.Auth = auth.NewAuthService(
 		&ctx.Config.Auth,
 		&ctx.Config.Auth.OAuthProviders,

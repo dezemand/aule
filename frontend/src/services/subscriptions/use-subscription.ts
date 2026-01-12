@@ -7,6 +7,7 @@ import {
 import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { useConnectionState, useWebSocket } from "../websocket/client";
 import type { Envelope } from "../websocket/websocket-client";
+import { errorPayloadSchema, subscribeAckSchema } from "@/model/ws";
 
 function isStale(state: QueryState | undefined, staleTime: number): boolean {
   if (!state) {
@@ -78,9 +79,18 @@ export function useSubscribe<
           query,
           initial,
         })
-        .response();
+        .responseTypes({
+          "subscription.subscribe.ack": subscribeAckSchema,
+          error: errorPayloadSchema,
+        });
 
-      subIdRef.current = (res.payload as SubscribeAckPayload)?.subscription_id;
+      if (res.type === "error") {
+        throw new Error(
+          `Subscription error: ${res.payload.code} ${res.payload.message}`,
+        );
+      }
+
+      subIdRef.current = res.payload.subscription_id;
       return res;
     },
     staleTime: 0,
@@ -131,7 +141,7 @@ export function useSubscription<
   useMessageHandler(subscriptionIdRef, queryKey);
   useSubscribe(subscriptionIdRef, { queryKey, topic, query, staleTime });
 
-  return useQuery<Envelope<TResult>>({
+  return useQuery<Envelope<string, TResult>>({
     queryKey,
     queryFn: () => new Promise(() => {}),
     staleTime: Infinity,

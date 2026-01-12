@@ -3,7 +3,6 @@ package api
 import (
 	"github.com/dezemandje/aule/internal/backend/auth"
 	"github.com/dezemandje/aule/internal/backend/wsproto"
-	wsidempotency "github.com/dezemandje/aule/internal/backend/wsproto/idempotency"
 	wssubscriptions "github.com/dezemandje/aule/internal/backend/wsproto/subscriptions"
 	"github.com/dezemandje/aule/internal/service/agentapi"
 	projectsservice "github.com/dezemandje/aule/internal/service/project"
@@ -68,34 +67,25 @@ func notFound(c *fiber.Ctx) error {
 }
 
 func setupWsRouter(ctx *ApiContext) {
-	ctx.UserWsRouter = wsproto.NewRouter()
-	ctx.UserWsHandler = wsproto.NewHandler(ctx.UserWsRouter)
-	registerWsRoutes(ctx)
+	ctx.UserWsHandler = wsproto.NewHandler(ctx.Services.Events, wsproto.NewMapClientStore())
+	ctx.Handlers = &Handlers{}
+	setupEventHandlers(ctx)
 }
 
-type Hey struct {
-	Message string `json:"message"`
-}
+func setupEventHandlers(ctx *ApiContext) {
+	// Subscription handler - handles subscribe/unsubscribe messages
+	ctx.Handlers.Subscriptions = wssubscriptions.NewHandler(
+		ctx.Services.Events,
+		ctx.Services.WsSubscriptions,
+		ctx.UserWsHandler,
+	)
+	ctx.Handlers.Subscriptions.SetupEventHandlers()
 
-func (h *Hey) Type() string {
-	return "hey"
-}
-
-func registerWsRoutes(ctx *ApiContext) {
-	store := wsidempotency.NewMemoryStore()
-	idemMgr := wsidempotency.NewService(store)
-	ctx.UserWsRouter.Use(idemMgr.Middleware())
-
-	subscribeHandler := wssubscriptions.NewHandler(ctx.Services.WsSubscriptions)
-	ctx.UserWsRouter.OnDisconnect(subscribeHandler.OnClose)
-	ctx.UserWsRouter.On(wssubscriptions.MsgTypeSubscribe, subscribeHandler.OnSubscribe)
-	ctx.UserWsRouter.On(wssubscriptions.MsgTypeUnsubscribe, subscribeHandler.OnUnsubscribe)
-
-	projectsHander := projectsservice.NewWsHandler(ctx.Services.Events, ctx.Services.WsSubscriptions, ctx.Services.Project)
-	ctx.UserWsRouter.On(projectsservice.MsgTypeProjectsList, projectsHander.OnListProjects)
-	ctx.UserWsRouter.On(projectsservice.MsgTypeProjectCreate, projectsHander.OnCreateProject)
-
-	ctx.UserWsRouter.OnConnect(func(c wsproto.Ctx) error {
-		return c.Send(&Hey{Message: "Welcome to the Aule WebSocket API!"})
-	})
+	// Projects handler - handles project CRUD via WS
+	ctx.Handlers.Projects = projectsservice.NewHandler(
+		ctx.Services.Events,
+		ctx.Services.Project,
+		ctx.Services.WsSubscriptions,
+	)
+	ctx.Handlers.Projects.SetupEventHandlers()
 }
