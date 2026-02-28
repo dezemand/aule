@@ -1,3 +1,5 @@
 [workspace]
 resolver = "2"
 members = ["packages/*"]
+# aule-spacetimedb is a WASM module -- build it with `spacetime build`, not `cargo build`
+exclude = ["packages/aule-spacetimedb"]

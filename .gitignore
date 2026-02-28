@@ -1,10 +1,15 @@
 # Rust
 /target/
+**/target/
 **/*.rs.bk
 Cargo.lock
 
+# Auto-generated SpacetimeDB bindings (regenerate with `just generate`)
+**/module_bindings/
+
 # Bun / Node
 app/node_modules/
+app/src/index.built.css
 app/.env
 app/.env.*
 !app/.env.example
@@ -15,7 +20,10 @@ app/.env.*
 *.swp
 *.swo
 *~
-.DS_Store
 
 # OS
+.DS_Store
 Thumbs.db
+
+# Containers
+.local/
