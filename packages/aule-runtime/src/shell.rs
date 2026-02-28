@@ -1,0 +1,88 @@
+use std::{
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+use anyhow::{Context, Result};
+
+#[derive(Debug, Clone)]
+pub struct ShellResult {
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+    pub duration_ms: u128,
+}
+
+pub fn run_shell(command: &str, timeout: Duration, max_output_bytes: usize) -> Result<ShellResult> {
+    let start = Instant::now();
+    let mut child = Command::new("sh")
+        .arg("-lc")
+        .arg(command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to spawn shell command: {command}"))?;
+
+    let mut timed_out = false;
+    loop {
+        if child.try_wait()?.is_some() {
+            break;
+        }
+
+        if start.elapsed() >= timeout {
+            timed_out = true;
+            child.kill().context("Failed to kill timed out process")?;
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("Failed to collect shell output")?;
+
+    let duration_ms = start.elapsed().as_millis();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    Ok(ShellResult {
+        exit_code: output.status.code(),
+        stdout: truncate_text(&stdout, max_output_bytes),
+        stderr: truncate_text(&stderr, max_output_bytes),
+        timed_out,
+        duration_ms,
+    })
+}
+
+fn truncate_text(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+
+    let marker = "\n...[truncated]";
+    let mut out = String::new();
+    for ch in input.chars() {
+        if out.len() + ch.len_utf8() + marker.len() > max_bytes {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push_str(marker);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_text;
+
+    #[test]
+    fn truncates_when_over_limit() {
+        let input = "abcdef";
+        let output = truncate_text(input, 4);
+        assert!(output.contains("[truncated]"));
+        assert!(output.len() <= 4 + "\n...[truncated]".len());
+    }
+}
