@@ -1,0 +1,12 @@
+[package]
+name = "aule-spacetimedb"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+spacetimedb = "2.0.2"
+log = "0.4"

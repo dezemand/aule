@@ -1,0 +1,8 @@
+services:
+  spacetimedb:
+    image: clockworklabs/spacetime:v2.0.2
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./.local/spacetimedb_data:/home/spacetime/.local/share/spacetime/data
+    command: [start]

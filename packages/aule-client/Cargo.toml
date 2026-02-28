@@ -1,0 +1,16 @@
+[package]
+name = "aule-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[[bin]]
+name = "aule-client"
+path = "src/main.rs"
+
+[dependencies]
+aule-spacetimedb-client = { path = "../aule-spacetimedb-client" }
+spacetimedb-sdk = "2.0.2"
+hex = "0.4"
+log = "0.4"
+env_logger = "0.11"

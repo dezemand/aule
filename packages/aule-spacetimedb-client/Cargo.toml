@@ -1,0 +1,9 @@
+[package]
+name = "aule-spacetimedb-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Auto-generated SpacetimeDB Rust client bindings for Aule"
+
+[dependencies]
+spacetimedb-sdk = "2.0.2"
