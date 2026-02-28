@@ -79,10 +79,23 @@ mod tests {
     use super::truncate_text;
 
     #[test]
-    fn truncates_when_over_limit() {
-        let input = "abcdef";
-        let output = truncate_text(input, 4);
-        assert!(output.contains("[truncated]"));
-        assert!(output.len() <= 4 + "\n...[truncated]".len());
+    fn no_truncation_when_within_limit() {
+        assert_eq!(truncate_text("abcdef", 6), "abcdef");
+        assert_eq!(truncate_text("abcdef", 100), "abcdef");
+    }
+
+    #[test]
+    fn truncates_with_marker_when_over_limit() {
+        // "abcdefghijklmnopqrst" (20 bytes) with max_bytes=19 forces truncation.
+        // Marker "\n...[truncated]" is 15 bytes, leaving 4 bytes for content.
+        let output = truncate_text("abcdefghijklmnopqrst", 19);
+        assert_eq!(output, "abcd\n...[truncated]");
+    }
+
+    #[test]
+    fn truncates_to_just_marker_when_limit_smaller_than_marker() {
+        // max_bytes=4 is smaller than the 14-byte marker, so no content chars fit.
+        let output = truncate_text("abcdef", 4);
+        assert_eq!(output, "\n...[truncated]");
     }
 }

@@ -1,8 +1,8 @@
-use std::{env, time::Duration};
+use std::{env, fmt, time::Duration};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RuntimeConfig {
     pub spacetimedb_uri: String,
     pub spacetimedb_db_name: String,
@@ -15,6 +15,24 @@ pub struct RuntimeConfig {
     pub shell_timeout: Duration,
     pub shell_output_limit_bytes: usize,
     pub max_steps_per_task: u32,
+}
+
+impl fmt::Debug for RuntimeConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeConfig")
+            .field("spacetimedb_uri", &self.spacetimedb_uri)
+            .field("spacetimedb_db_name", &self.spacetimedb_db_name)
+            .field("runtime_name", &self.runtime_name)
+            .field("agent_type_id", &self.agent_type_id)
+            .field("agent_version", &self.agent_version)
+            .field("openai_api_key", &"[REDACTED]")
+            .field("openai_model", &self.openai_model)
+            .field("heartbeat_interval", &self.heartbeat_interval)
+            .field("shell_timeout", &self.shell_timeout)
+            .field("shell_output_limit_bytes", &self.shell_output_limit_bytes)
+            .field("max_steps_per_task", &self.max_steps_per_task)
+            .finish()
+    }
 }
 
 impl RuntimeConfig {

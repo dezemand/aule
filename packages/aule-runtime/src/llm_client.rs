@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -161,65 +162,82 @@ impl OpenAiClient {
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_millis(250);
 
-        // Read SSE line by line from the byte stream
-        let full_body = response.bytes().await.context("Failed to read SSE body")?;
-        let text = String::from_utf8_lossy(&full_body);
+        // Consume the response as a byte stream, processing SSE lines
+        // incrementally as they arrive (handles partial lines across chunks).
+        let mut byte_stream = response.bytes_stream();
+        let mut line_buf = String::new();
+        let mut done = false;
 
-        for line in text.lines() {
-            if !line.starts_with("data: ") {
-                continue;
+        while let Some(chunk_result) = byte_stream.next().await {
+            let chunk_bytes = chunk_result.context("Error reading SSE stream chunk")?;
+            let chunk_text = String::from_utf8_lossy(&chunk_bytes);
+            line_buf.push_str(&chunk_text);
+
+            // Process all complete lines in the buffer
+            while let Some(newline_pos) = line_buf.find('\n') {
+                let line: String = line_buf.drain(..=newline_pos).collect();
+                let line = line.trim_end();
+
+                if !line.starts_with("data: ") {
+                    continue;
+                }
+                let data = &line["data: ".len()..];
+                if data == "[DONE]" {
+                    done = true;
+                    break;
+                }
+
+                let chunk: SseChunk = match serde_json::from_str(data) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                let Some(choice) = chunk.choices.first() else {
+                    continue;
+                };
+                let delta = &choice.delta;
+
+                // Content delta
+                if let Some(ref text_delta) = delta.content {
+                    content_buf.push_str(text_delta);
+                    pending_text.push_str(text_delta);
+                }
+
+                // Tool call deltas
+                if let Some(ref tool_calls) = delta.tool_calls {
+                    for tc_delta in tool_calls {
+                        if let Some(ref id) = tc_delta.id {
+                            tool_call_id = id.clone();
+                        }
+                        if let Some(ref func) = tc_delta.function {
+                            if let Some(ref name) = func.name {
+                                tool_name = name.clone();
+                            }
+                            if let Some(ref args) = func.arguments {
+                                tool_args.push_str(args);
+                                pending_args.push_str(args);
+                            }
+                        }
+                    }
+                }
+
+                // Flush buffered deltas if interval elapsed
+                if last_flush.elapsed() >= flush_interval {
+                    if !pending_text.is_empty() {
+                        on_event(StreamEvent::TextDelta(std::mem::take(&mut pending_text)));
+                    }
+                    if !pending_args.is_empty() {
+                        on_event(StreamEvent::ToolArgsDelta {
+                            tool_name: tool_name.clone(),
+                            args_delta: std::mem::take(&mut pending_args),
+                        });
+                    }
+                    last_flush = Instant::now();
+                }
             }
-            let data = &line["data: ".len()..];
-            if data == "[DONE]" {
+
+            if done {
                 break;
-            }
-
-            let chunk: SseChunk = match serde_json::from_str(data) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let Some(choice) = chunk.choices.first() else {
-                continue;
-            };
-            let delta = &choice.delta;
-
-            // Content delta
-            if let Some(ref text_delta) = delta.content {
-                content_buf.push_str(text_delta);
-                pending_text.push_str(text_delta);
-            }
-
-            // Tool call deltas
-            if let Some(ref tool_calls) = delta.tool_calls {
-                for tc_delta in tool_calls {
-                    if let Some(ref id) = tc_delta.id {
-                        tool_call_id = id.clone();
-                    }
-                    if let Some(ref func) = tc_delta.function {
-                        if let Some(ref name) = func.name {
-                            tool_name = name.clone();
-                        }
-                        if let Some(ref args) = func.arguments {
-                            tool_args.push_str(args);
-                            pending_args.push_str(args);
-                        }
-                    }
-                }
-            }
-
-            // Flush buffered deltas if interval elapsed
-            if last_flush.elapsed() >= flush_interval {
-                if !pending_text.is_empty() {
-                    on_event(StreamEvent::TextDelta(std::mem::take(&mut pending_text)));
-                }
-                if !pending_args.is_empty() {
-                    on_event(StreamEvent::ToolArgsDelta {
-                        tool_name: tool_name.clone(),
-                        args_delta: std::mem::take(&mut pending_args),
-                    });
-                }
-                last_flush = Instant::now();
             }
         }
 
