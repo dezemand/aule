@@ -2,9 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
-  useRef,
   useState,
-  useSyncExternalStore,
   useCallback,
   type ReactNode,
 } from "react";
@@ -87,6 +85,7 @@ export function SpacetimeProvider({ children }: { children: ReactNode }) {
         ctx.db.agent_type_version.onUpdate(() => bump());
         ctx.db.agent_type_version.onDelete(() => bump());
         ctx.db.observation.onInsert(() => bump());
+        ctx.db.observation.onUpdate(() => bump());
         ctx.db.observation.onDelete(() => bump());
 
         // Subscribe to all tables

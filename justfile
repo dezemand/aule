@@ -66,6 +66,6 @@ typecheck:
 
 # --- Full setup ---
 
-# Bootstrap everything: install deps, build module, generate bindings
-setup: install build-module generate build
+# Bootstrap everything: install deps, generate bindings, build workspace
+setup: install generate build
     @echo "Setup complete. Run 'just dev' to start the dashboard."

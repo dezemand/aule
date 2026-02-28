@@ -31,6 +31,11 @@ pub fn register_runtime(
         return Err("Runtime name must not be empty".to_string());
     }
 
+    // Name must be unique
+    if ctx.db.agent_runtime().name().find(&name).is_some() {
+        return Err(format!("Runtime name '{name}' is already taken"));
+    }
+
     ctx.db.agent_runtime().insert(AgentRuntime {
         identity: sender,
         name,
@@ -56,6 +61,19 @@ pub fn deregister_runtime(ctx: &ReducerContext) -> Result<(), String> {
         .identity()
         .find(sender)
         .ok_or("Runtime not registered")?;
+
+    // Reject deregistration if any tasks are still running
+    let has_running = ctx
+        .db
+        .agent_task()
+        .iter()
+        .any(|t| t.assigned_runtime == Some(sender) && t.status == TaskStatus::Running);
+    if has_running {
+        return Err(
+            "Cannot deregister: runtime has running tasks. Complete or fail them first."
+                .to_string(),
+        );
+    }
 
     // Unassign any tasks that are assigned but not yet running
     for task in ctx.db.agent_task().iter() {

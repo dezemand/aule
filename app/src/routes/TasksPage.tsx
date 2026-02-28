@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useSpacetime } from "../hooks/useSpacetime";
+import { Badge } from "../components/Badge";
 
 function taskStatusColor(tag: string): string {
   switch (tag) {
@@ -18,16 +19,6 @@ function taskStatusColor(tag: string): string {
     default:
       return "bg-gray-800 text-gray-400";
   }
-}
-
-function Badge({ label, color }: { label: string; color: string }) {
-  return (
-    <span
-      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${color}`}
-    >
-      {label}
-    </span>
-  );
 }
 
 type StatusFilter = "all" | "active" | "completed" | "failed";

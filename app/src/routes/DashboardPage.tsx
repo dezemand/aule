@@ -1,8 +1,5 @@
 import { useQuery, useSpacetime } from "../hooks/useSpacetime";
-
-function statusTag(tag: string): string {
-  return tag;
-}
+import { Badge } from "../components/Badge";
 
 function runtimeStatusColor(tag: string): string {
   switch (tag) {
@@ -17,35 +14,6 @@ function runtimeStatusColor(tag: string): string {
     default:
       return "bg-gray-800 text-gray-400";
   }
-}
-
-function taskStatusColor(tag: string): string {
-  switch (tag) {
-    case "Pending":
-      return "bg-gray-800 text-gray-300";
-    case "Assigned":
-      return "bg-blue-900/50 text-blue-300";
-    case "Running":
-      return "bg-yellow-900/50 text-yellow-300";
-    case "Completed":
-      return "bg-green-900/50 text-green-300";
-    case "Failed":
-      return "bg-red-900/50 text-red-300";
-    case "Cancelled":
-      return "bg-gray-800 text-gray-500";
-    default:
-      return "bg-gray-800 text-gray-400";
-  }
-}
-
-function Badge({ label, color }: { label: string; color: string }) {
-  return (
-    <span
-      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${color}`}
-    >
-      {label}
-    </span>
-  );
 }
 
 function StatCard({
@@ -85,13 +53,13 @@ export function DashboardPage() {
   }
 
   const onlineRuntimes = (runtimes ?? []).filter(
-    (r) => statusTag(r.status.tag) !== "Offline"
+    (r) => r.status.tag !== "Offline"
   );
   const activeTasks = (tasks ?? []).filter(
     (t) =>
-      statusTag(t.status.tag) !== "Completed" &&
-      statusTag(t.status.tag) !== "Failed" &&
-      statusTag(t.status.tag) !== "Cancelled"
+      t.status.tag !== "Completed" &&
+      t.status.tag !== "Failed" &&
+      t.status.tag !== "Cancelled"
   );
   const recentObs = [...(observations ?? [])]
     .sort(
@@ -151,7 +119,7 @@ export function DashboardPage() {
                     </td>
                     <td className="px-4 py-2">
                       <Badge
-                        label={statusTag(r.status.tag)}
+                        label={r.status.tag}
                         color={runtimeStatusColor(r.status.tag)}
                       />
                     </td>
@@ -182,7 +150,7 @@ export function DashboardPage() {
               >
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                   <Badge
-                    label={statusTag(o.kind.tag)}
+                    label={o.kind.tag}
                     color={
                       o.kind.tag === "Error"
                         ? "bg-red-900/50 text-red-300"

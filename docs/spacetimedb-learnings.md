@@ -233,7 +233,7 @@ spacetime publish --server local -p packages/aule-spacetimedb aule
 
 ```sh
 # Rust
-spacetime generate --lang rust --out-dir packages/aule-client/src/module_bindings -p packages/aule-spacetimedb
+spacetime generate --lang rust --out-dir packages/aule-spacetimedb-client/src/module_bindings -p packages/aule-spacetimedb
 
 # TypeScript
 spacetime generate --lang typescript --out-dir app/src/module_bindings -p packages/aule-spacetimedb
@@ -252,9 +252,9 @@ cd app && bun index.ts
 ### Querying the database
 
 ```sh
-spacetime sql --server local aule "SELECT * FROM user"
-spacetime sql --server local aule "SELECT * FROM message"
-spacetime sql --server local aule "SELECT * FROM stats"
+spacetime sql --server local aule "SELECT * FROM agent_runtime"
+spacetime sql --server local aule "SELECT * FROM agent_task"
+spacetime sql --server local aule "SELECT * FROM agent_type"
 ```
 
 ### Viewing logs

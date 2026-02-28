@@ -18,6 +18,7 @@ pub struct AgentRuntime {
     #[primary_key]
     pub identity: Identity,
     /// Human-readable name for this runtime instance (e.g. "builder-01").
+    #[unique]
     pub name: String,
     /// The agent type this runtime is configured to run.
     pub agent_type_id: u64,
