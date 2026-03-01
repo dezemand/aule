@@ -87,8 +87,8 @@ AULE_SHELL_TIMEOUT_SECONDS=30       # max shell command duration
 AULE_SHELL_OUTPUT_LIMIT_BYTES=50000 # max shell output captured
 AULE_MAX_STEPS_PER_TASK=24          # max reasoning steps per task
 AULE_LLM_MAX_RETRIES=3              # retries for transient LLM stream failures
-AULE_LLM_RETRY_BASE_DELAY_MS=1000   # base backoff delay between retries
-AULE_LLM_RETRY_MAX_DELAY_MS=30000   # max backoff delay cap
+AULE_LLM_RETRY_BASE_MS=1000         # base backoff delay between retries
+AULE_LLM_RETRY_MAX_MS=10000         # max backoff delay cap
 ```
 
 ### K8s metadata (optional, auto-detected in pods)

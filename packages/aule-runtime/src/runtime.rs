@@ -1012,12 +1012,18 @@ where
             Ok(value) => return Ok(value),
             Err(err) => {
                 let attempt_number = attempt + 1;
+                let retryable = is_retryable_reducer_error(&err);
                 warn!(
-                    "{label} failed on attempt {attempt_number}/{}: {:#}",
+                    "{label} failed on attempt {attempt_number}/{} (retryable={}): {:#}",
                     MAX_RETRIES + 1,
+                    retryable,
                     err
                 );
                 last_error = Some(err);
+
+                if !retryable {
+                    break;
+                }
 
                 if attempt < MAX_RETRIES {
                     let backoff_ms = 200 * u64::from(attempt_number);
@@ -1028,6 +1034,37 @@ where
     }
 
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("{label} failed without an error")))
+}
+
+fn is_retryable_reducer_error(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_lowercase();
+
+    let permanent_markers = [
+        "can only",
+        "only the assigned runtime",
+        "already",
+        "not found",
+        "cannot",
+        "invalid",
+    ];
+    if permanent_markers.iter().any(|marker| msg.contains(marker)) {
+        return false;
+    }
+
+    let transient_markers = [
+        "connection",
+        "network",
+        "disconnected",
+        "timed out",
+        "timeout",
+        "transport",
+        "temporarily unavailable",
+        "websocket",
+        "i/o",
+        "io error",
+    ];
+
+    transient_markers.iter().any(|marker| msg.contains(marker))
 }
 
 fn post_observation(ctx: &DbConnection, task_id: u64, kind: ObservationKind, content: String) {
