@@ -1,6 +1,8 @@
 use std::{
+    collections::HashSet,
     sync::atomic::{AtomicU64, Ordering},
     sync::mpsc::{self, Receiver, Sender},
+    thread,
     time::{Duration, Instant},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -18,6 +20,16 @@ use crate::{
 
 static RUNTIME_EVENT_SEQ: AtomicU64 = AtomicU64::new(1);
 
+struct PreparedTask {
+    task: AgentTask,
+    system_prompt: String,
+}
+
+enum TaskExecutionReport {
+    Succeeded { task_id: u64 },
+    Failed { task_id: u64, error: String },
+}
+
 pub fn run(config: RuntimeConfig) -> Result<()> {
     info!(
         "Starting runtime '{}' (agent_type_id={}, agent_version={})",
@@ -30,22 +42,7 @@ pub fn run(config: RuntimeConfig) -> Result<()> {
     subscribe_to_tables(&ctx, task_tx)?;
     let _network_thread = ctx.run_threaded();
 
-    // Build a single-threaded tokio runtime for async HTTP streaming.
-    // We pass the Runtime (not just a Handle) so block_on() drives the
-    // I/O reactor — a Handle alone won't poll the reactor on a
-    // current_thread runtime, causing requests to hang.
-    let tokio_rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("Failed to create tokio runtime")?;
-
-    let llm = OpenAiClient::new(
-        config.openai_api_key.clone(),
-        config.openai_model.clone(),
-        tokio_rt,
-    )?;
-
-    event_loop(&ctx, &config, &llm, task_rx)
+    event_loop(&ctx, &config, task_rx)
 }
 
 fn creds_store() -> credentials::File {
@@ -125,16 +122,29 @@ fn subscribe_to_tables(ctx: &DbConnection, task_tx: Sender<u64>) -> Result<()> {
     Ok(())
 }
 
-fn event_loop(
-    ctx: &DbConnection,
-    config: &RuntimeConfig,
-    llm: &OpenAiClient,
-    task_rx: Receiver<u64>,
-) -> Result<()> {
+fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>) -> Result<()> {
+    let (task_result_tx, task_result_rx) = mpsc::channel::<TaskExecutionReport>();
+    let mut in_flight_tasks = HashSet::<u64>::new();
     let mut registered = false;
     let mut last_heartbeat = Instant::now();
 
     loop {
+        while let Ok(report) = task_result_rx.try_recv() {
+            match report {
+                TaskExecutionReport::Succeeded { task_id } => {
+                    in_flight_tasks.remove(&task_id);
+                    info!("Task {task_id} worker finished successfully");
+                }
+                TaskExecutionReport::Failed { task_id, error } => {
+                    in_flight_tasks.remove(&task_id);
+                    error!("Task {task_id} execution failed: {error}");
+                    let _ = ctx
+                        .reducers
+                        .fail_task(task_id, format!("runtime error: {error}"));
+                }
+            }
+        }
+
         if !registered && ctx.try_identity().is_some() {
             match ctx
                 .reducers
@@ -165,14 +175,42 @@ fn event_loop(
 
         match task_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(task_id) => {
-                if let Err(err) = execute_task(ctx, config, llm, task_id) {
-                    error!("Task {task_id} execution failed: {err:#}");
-                    let _ = ctx
-                        .reducers
-                        .fail_task(task_id, format!("runtime error: {err:#}"));
+                if in_flight_tasks.contains(&task_id) {
+                    continue;
+                }
+
+                let prepared = match prepare_task_execution(ctx, config, task_id) {
+                    Ok(Some(prepared)) => prepared,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        error!("Task {task_id} could not be prepared: {err:#}");
+                        let _ = ctx
+                            .reducers
+                            .fail_task(task_id, format!("runtime error: {err:#}"));
+                        continue;
+                    }
+                };
+
+                in_flight_tasks.insert(task_id);
+                spawn_task_worker(config.clone(), prepared, task_result_tx.clone());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                while let Ok(report) = task_result_rx.try_recv() {
+                    match report {
+                        TaskExecutionReport::Succeeded { task_id } => {
+                            in_flight_tasks.remove(&task_id);
+                            info!("Task {task_id} worker finished successfully");
+                        }
+                        TaskExecutionReport::Failed { task_id, error } => {
+                            in_flight_tasks.remove(&task_id);
+                            error!("Task {task_id} execution failed: {error}");
+                            let _ = ctx
+                                .reducers
+                                .fail_task(task_id, format!("runtime error: {error}"));
+                        }
+                    }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 bail!("Task queue disconnected");
             }
@@ -180,12 +218,11 @@ fn event_loop(
     }
 }
 
-fn execute_task(
+fn prepare_task_execution(
     ctx: &DbConnection,
     config: &RuntimeConfig,
-    llm: &OpenAiClient,
     task_id: u64,
-) -> Result<()> {
+) -> Result<Option<PreparedTask>> {
     let identity = ctx
         .try_identity()
         .context("No runtime identity available yet")?;
@@ -198,8 +235,71 @@ fn execute_task(
         .ok_or_else(|| anyhow::anyhow!("Task {task_id} not found in cache"))?;
 
     if task.assigned_runtime != Some(identity) || task.status != TaskStatus::Assigned {
-        return Ok(());
+        return Ok(None);
     }
+
+    let system_prompt = resolve_system_prompt(ctx, task.agent_type_id, &config.agent_version)?;
+
+    Ok(Some(PreparedTask {
+        task,
+        system_prompt,
+    }))
+}
+
+fn spawn_task_worker(
+    config: RuntimeConfig,
+    prepared: PreparedTask,
+    result_tx: Sender<TaskExecutionReport>,
+) {
+    thread::spawn(move || {
+        let task_id = prepared.task.id;
+        let report = match run_task_worker(config, prepared) {
+            Ok(_) => TaskExecutionReport::Succeeded { task_id },
+            Err(err) => TaskExecutionReport::Failed {
+                task_id,
+                error: format!("{err:#}"),
+            },
+        };
+
+        if result_tx.send(report).is_err() {
+            error!("Task worker could not report completion for task {task_id}");
+        }
+    });
+}
+
+fn run_task_worker(config: RuntimeConfig, prepared: PreparedTask) -> Result<()> {
+    let ctx = connect_to_db(&config)?;
+    let _network_thread = ctx.run_threaded();
+
+    let wait_start = Instant::now();
+    while ctx.try_identity().is_none() {
+        if wait_start.elapsed() > Duration::from_secs(5) {
+            bail!("Worker connection did not obtain identity within 5 seconds");
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    let tokio_rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to create tokio runtime in worker")?;
+    let llm = OpenAiClient::new(
+        config.openai_api_key.clone(),
+        config.openai_model.clone(),
+        tokio_rt,
+    )?;
+
+    execute_prepared_task(&ctx, &config, &llm, &prepared.task, &prepared.system_prompt)
+}
+
+fn execute_prepared_task(
+    ctx: &DbConnection,
+    config: &RuntimeConfig,
+    llm: &OpenAiClient,
+    task: &AgentTask,
+    system_prompt: &str,
+) -> Result<()> {
+    let task_id = task.id;
 
     ctx.reducers
         .start_task(task_id)
@@ -213,8 +313,7 @@ fn execute_task(
         format!("Picked up task '{}'.", task.title),
     );
 
-    let system_prompt = resolve_system_prompt(ctx, task.agent_type_id, &config.agent_version)?;
-    run_reasoning_loop(ctx, config, llm, &task, &system_prompt)
+    run_reasoning_loop(ctx, config, llm, task, system_prompt)
 }
 
 fn resolve_system_prompt(ctx: &DbConnection, agent_type_id: u64, version: &str) -> Result<String> {

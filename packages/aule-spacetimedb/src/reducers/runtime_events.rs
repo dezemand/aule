@@ -23,6 +23,8 @@ pub fn create_runtime_event(
         return Err(format!("Runtime event {id} already exists"));
     }
 
+    let event_id = id.clone();
+
     ensure_runtime_can_write_task_logs(ctx, task_id, sender)?;
 
     ctx.db.runtime_event().insert(RuntimeEvent {
@@ -30,11 +32,19 @@ pub fn create_runtime_event(
         task_id,
         runtime_identity: sender,
         turn,
-        event_type,
+        event_type: event_type.clone(),
         content,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
     });
+
+    log::info!(
+        "Runtime event created: id={}, task_id={}, turn={}, event_type={:?}",
+        event_id,
+        task_id,
+        turn,
+        event_type
+    );
 
     Ok(())
 }
@@ -63,8 +73,15 @@ pub fn update_runtime_event(
     ctx.db.runtime_event().id().update(RuntimeEvent {
         content,
         updated_at: ctx.timestamp,
-        ..event
+        ..event.clone()
     });
+
+    log::info!(
+        "Runtime event updated: id={}, task_id={}, event_type={:?}",
+        event.id,
+        event.task_id,
+        event.event_type
+    );
 
     Ok(())
 }

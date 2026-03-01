@@ -6,6 +6,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+const MAX_TOOL_CALLS_PER_RESPONSE: usize = 8;
+
 // ---------------------------------------------------------------------------
 // Conversation state
 // ---------------------------------------------------------------------------
@@ -208,6 +210,96 @@ impl OpenAiClient {
         let mut line_buf: Vec<u8> = Vec::new();
         let mut done = false;
 
+        let mut process_sse_line = |raw_line: &str| -> Result<bool> {
+            let line = raw_line.trim_end();
+            if !line.starts_with("data: ") {
+                return Ok(false);
+            }
+
+            let data = &line["data: ".len()..];
+            if data == "[DONE]" {
+                return Ok(true);
+            }
+
+            let chunk: SseChunk = match serde_json::from_str(data) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::debug!("Skipping malformed SSE chunk: {e} — data: {data}");
+                    return Ok(false);
+                }
+            };
+
+            let Some(choice) = chunk.choices.first() else {
+                return Ok(false);
+            };
+            let delta = &choice.delta;
+
+            // Content delta
+            if let Some(ref text_delta) = delta.content {
+                content_buf.push_str(text_delta);
+                pending_text.push_str(text_delta);
+            }
+
+            // Tool call deltas — tracked by index
+            if let Some(ref tc_deltas) = delta.tool_calls {
+                for tc_delta in tc_deltas {
+                    let idx = tc_delta.index.unwrap_or(0);
+
+                    if idx >= MAX_TOOL_CALLS_PER_RESPONSE {
+                        bail!(
+                            "OpenAI stream returned tool call index {} exceeding maximum {}",
+                            idx,
+                            MAX_TOOL_CALLS_PER_RESPONSE
+                        );
+                    }
+
+                    if idx > tool_calls.len() {
+                        bail!(
+                            "OpenAI stream returned out-of-order tool call index {} (current_len={})",
+                            idx,
+                            tool_calls.len()
+                        );
+                    }
+
+                    if idx == tool_calls.len() {
+                        tool_calls.push((String::new(), String::new(), String::new()));
+                    }
+
+                    let entry = &mut tool_calls[idx];
+
+                    if let Some(ref id) = tc_delta.id {
+                        entry.0 = id.clone();
+                    }
+                    if let Some(ref func) = tc_delta.function {
+                        if let Some(ref name) = func.name {
+                            entry.1 = name.clone();
+                            active_tool_name = name.clone();
+                        }
+                        if let Some(ref args) = func.arguments {
+                            entry.2.push_str(args);
+                            pending_args.push_str(args);
+                        }
+                    }
+                }
+            }
+
+            // Flush buffered deltas if interval elapsed
+            if last_flush.elapsed() >= flush_interval {
+                if !pending_text.is_empty() {
+                    on_event(StreamEvent::TextDelta(std::mem::take(&mut pending_text)));
+                }
+                if !pending_args.is_empty() {
+                    on_event(StreamEvent::ToolArgsDelta {
+                        tool_name: active_tool_name.clone(),
+                        args_delta: std::mem::take(&mut pending_args),
+                    });
+                }
+                last_flush = Instant::now();
+            }
+
+            Ok(false)
+        };
+
         while let Some(chunk_result) = byte_stream.next().await {
             let chunk_bytes = chunk_result.context("Error reading SSE stream chunk")?;
             line_buf.extend_from_slice(&chunk_bytes);
@@ -216,81 +308,21 @@ impl OpenAiClient {
             while let Some(newline_pos) = line_buf.iter().position(|&b| b == b'\n') {
                 let line_bytes: Vec<u8> = line_buf.drain(..=newline_pos).collect();
                 let line = String::from_utf8_lossy(&line_bytes);
-                let line = line.trim_end();
-
-                if !line.starts_with("data: ") {
-                    continue;
-                }
-                let data = &line["data: ".len()..];
-                if data == "[DONE]" {
-                    done = true;
+                done = process_sse_line(&line)?;
+                if done {
                     break;
-                }
-
-                let chunk: SseChunk = match serde_json::from_str(data) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::debug!("Skipping malformed SSE chunk: {e} — data: {data}");
-                        continue;
-                    }
-                };
-
-                let Some(choice) = chunk.choices.first() else {
-                    continue;
-                };
-                let delta = &choice.delta;
-
-                // Content delta
-                if let Some(ref text_delta) = delta.content {
-                    content_buf.push_str(text_delta);
-                    pending_text.push_str(text_delta);
-                }
-
-                // Tool call deltas — tracked by index
-                if let Some(ref tc_deltas) = delta.tool_calls {
-                    for tc_delta in tc_deltas {
-                        let idx = tc_delta.index.unwrap_or(0);
-
-                        // Grow the tool_calls vec if needed
-                        while tool_calls.len() <= idx {
-                            tool_calls.push((String::new(), String::new(), String::new()));
-                        }
-                        let entry = &mut tool_calls[idx];
-
-                        if let Some(ref id) = tc_delta.id {
-                            entry.0 = id.clone();
-                        }
-                        if let Some(ref func) = tc_delta.function {
-                            if let Some(ref name) = func.name {
-                                entry.1 = name.clone();
-                                active_tool_name = name.clone();
-                            }
-                            if let Some(ref args) = func.arguments {
-                                entry.2.push_str(args);
-                                pending_args.push_str(args);
-                            }
-                        }
-                    }
-                }
-
-                // Flush buffered deltas if interval elapsed
-                if last_flush.elapsed() >= flush_interval {
-                    if !pending_text.is_empty() {
-                        on_event(StreamEvent::TextDelta(std::mem::take(&mut pending_text)));
-                    }
-                    if !pending_args.is_empty() {
-                        on_event(StreamEvent::ToolArgsDelta {
-                            tool_name: active_tool_name.clone(),
-                            args_delta: std::mem::take(&mut pending_args),
-                        });
-                    }
-                    last_flush = Instant::now();
                 }
             }
 
             if done {
                 break;
             }
+        }
+
+        if !done && !line_buf.is_empty() {
+            let line = String::from_utf8_lossy(&line_buf);
+            done = process_sse_line(&line)?;
+            line_buf.clear();
         }
 
         // Final flush of any remaining buffered content
@@ -349,7 +381,14 @@ impl OpenAiClient {
         // placeholder tool results for them (required by OpenAI).
         let extra_tool_call_ids: Vec<String> = tool_calls[1..]
             .iter()
-            .map(|(id, _, _)| id.clone())
+            .filter_map(|(id, _, _)| {
+                let id = id.trim();
+                if id.is_empty() {
+                    None
+                } else {
+                    Some(id.to_string())
+                }
+            })
             .collect();
 
         Ok(ToolDecision {
