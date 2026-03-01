@@ -311,7 +311,7 @@ fn run_reasoning_loop(
             }
             AgentAction::Observe { kind, content } => {
                 let obs_kind = observe_kind_to_observation_kind(&kind);
-                post_observation(ctx, task.id, obs_kind, content.clone());
+                post_observation(ctx, task.id, obs_kind, content);
                 conversation.push_tool_result(
                     &decision.tool_call_id,
                     format!("observation posted ({})", kind.as_str()),
