@@ -1,5 +1,11 @@
 # Aulë — Agent Instructions
 
+## Important
+
+- When implementing any feature, make sure to validate the plan against the existing documentation and architecture in `docs/`. The documentation is the north star; if the implementation deviates, update the docs.
+- When updating documentation or adding new documentation, make sure to update all relevant documents in `docs/` to keep them in sync.
+- When working on GH issues, use a feature branch like `feature/<issue-number>-<short-description>` and open a PR when ready for review.
+
 ## Repository Layout
 
 - `packages/` — Rust workspace crates. Each sub-directory is a separate crate.
