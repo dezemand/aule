@@ -112,22 +112,25 @@ pub struct ToolDecision {
     pub assistant_message: Value,
     pub tool_call_id: String,
     pub action: AgentAction,
+    /// IDs of additional tool calls the model made in the same turn.
+    /// The caller must provide tool results for these (OpenAI requires it).
+    pub extra_tool_call_ids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
 // OpenAI client (streaming)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpenAiClient {
     api_key: String,
     model: String,
     http: Client,
-    rt: tokio::runtime::Handle,
+    rt: tokio::runtime::Runtime,
 }
 
 impl OpenAiClient {
-    pub fn new(api_key: String, model: String, rt: tokio::runtime::Handle) -> Result<Self> {
+    pub fn new(api_key: String, model: String, rt: tokio::runtime::Runtime) -> Result<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .read_timeout(Duration::from_secs(120))
@@ -165,6 +168,7 @@ impl OpenAiClient {
             "messages": conversation.messages(),
             "tools": tool_definitions(),
             "tool_choice": "required",
+            "parallel_tool_calls": false,
         });
 
         let response = self
@@ -185,15 +189,15 @@ impl OpenAiClient {
             bail!("OpenAI request failed with {status}: {err_body}");
         }
 
-        // Accumulation state
+        // Accumulation state — track tool calls by index so parallel calls
+        // from the model don't get their arguments concatenated together.
         let mut content_buf = String::new();
-        let mut tool_call_id = String::new();
-        let mut tool_name = String::new();
-        let mut tool_args = String::new();
+        let mut tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args)
 
         // Buffered flush state
         let mut pending_text = String::new();
         let mut pending_args = String::new();
+        let mut active_tool_name = String::new();
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_millis(250);
 
@@ -242,18 +246,27 @@ impl OpenAiClient {
                     pending_text.push_str(text_delta);
                 }
 
-                // Tool call deltas
-                if let Some(ref tool_calls) = delta.tool_calls {
-                    for tc_delta in tool_calls {
+                // Tool call deltas — tracked by index
+                if let Some(ref tc_deltas) = delta.tool_calls {
+                    for tc_delta in tc_deltas {
+                        let idx = tc_delta.index.unwrap_or(0);
+
+                        // Grow the tool_calls vec if needed
+                        while tool_calls.len() <= idx {
+                            tool_calls.push((String::new(), String::new(), String::new()));
+                        }
+                        let entry = &mut tool_calls[idx];
+
                         if let Some(ref id) = tc_delta.id {
-                            tool_call_id = id.clone();
+                            entry.0 = id.clone();
                         }
                         if let Some(ref func) = tc_delta.function {
                             if let Some(ref name) = func.name {
-                                tool_name = name.clone();
+                                entry.1 = name.clone();
+                                active_tool_name = name.clone();
                             }
                             if let Some(ref args) = func.arguments {
-                                tool_args.push_str(args);
+                                entry.2.push_str(args);
                                 pending_args.push_str(args);
                             }
                         }
@@ -267,7 +280,7 @@ impl OpenAiClient {
                     }
                     if !pending_args.is_empty() {
                         on_event(StreamEvent::ToolArgsDelta {
-                            tool_name: tool_name.clone(),
+                            tool_name: active_tool_name.clone(),
                             args_delta: std::mem::take(&mut pending_args),
                         });
                     }
@@ -286,7 +299,7 @@ impl OpenAiClient {
         }
         if !pending_args.is_empty() {
             on_event(StreamEvent::ToolArgsDelta {
-                tool_name: tool_name.clone(),
+                tool_name: active_tool_name,
                 args_delta: pending_args,
             });
         }
@@ -297,31 +310,53 @@ impl OpenAiClient {
             bail!("OpenAI SSE stream ended without a [DONE] marker (connection may have dropped)");
         }
 
-        if tool_call_id.is_empty() || tool_name.is_empty() {
+        if tool_calls.is_empty() {
             bail!("OpenAI stream completed without a tool call");
         }
 
-        let action = action_from_tool_call(&tool_name, &tool_args)?;
+        // Use the first tool call as the action to execute this turn.
+        let (ref tc_id, ref tc_name, ref tc_args) = tool_calls[0];
+        if tc_id.is_empty() || tc_name.is_empty() {
+            bail!("OpenAI stream completed with an incomplete tool call");
+        }
+
+        let action = action_from_tool_call(tc_name, tc_args)?;
         on_event(StreamEvent::Done);
 
-        // Build the assistant message for conversation state
+        // Build the assistant message including ALL tool calls for correct
+        // conversation state (OpenAI expects a tool result for each).
+        let tool_calls_json: Vec<Value> = tool_calls
+            .iter()
+            .map(|(id, name, args)| {
+                json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": args,
+                    }
+                })
+            })
+            .collect();
+
         let assistant_message = json!({
             "role": "assistant",
             "content": if content_buf.is_empty() { Value::Null } else { Value::String(content_buf) },
-            "tool_calls": [{
-                "id": tool_call_id,
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": tool_args,
-                }
-            }]
+            "tool_calls": tool_calls_json,
         });
+
+        // Collect the extra tool call IDs so the caller can provide
+        // placeholder tool results for them (required by OpenAI).
+        let extra_tool_call_ids: Vec<String> = tool_calls[1..]
+            .iter()
+            .map(|(id, _, _)| id.clone())
+            .collect();
 
         Ok(ToolDecision {
             assistant_message,
-            tool_call_id,
+            tool_call_id: tc_id.clone(),
             action,
+            extra_tool_call_ids,
         })
     }
 }
@@ -501,6 +536,7 @@ struct SseDelta {
 
 #[derive(Debug, Deserialize)]
 struct SseToolCallDelta {
+    index: Option<usize>,
     id: Option<String>,
     function: Option<SseFunctionDelta>,
 }

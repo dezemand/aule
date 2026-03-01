@@ -26,7 +26,10 @@ pub fn run(config: RuntimeConfig) -> Result<()> {
     subscribe_to_tables(&ctx, task_tx)?;
     let _network_thread = ctx.run_threaded();
 
-    // Build a single-threaded tokio runtime for async HTTP streaming
+    // Build a single-threaded tokio runtime for async HTTP streaming.
+    // We pass the Runtime (not just a Handle) so block_on() drives the
+    // I/O reactor — a Handle alone won't poll the reactor on a
+    // current_thread runtime, causing requests to hang.
     let tokio_rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -35,7 +38,7 @@ pub fn run(config: RuntimeConfig) -> Result<()> {
     let llm = OpenAiClient::new(
         config.openai_api_key.clone(),
         config.openai_model.clone(),
-        tokio_rt.handle().clone(),
+        tokio_rt,
     )?;
 
     event_loop(&ctx, &config, &llm, task_rx)
@@ -280,6 +283,16 @@ fn run_reasoning_loop(
             .with_context(|| format!("LLM streaming failed at turn {turn}"))?;
 
         conversation.push_assistant_message(decision.assistant_message);
+
+        // If the model returned multiple tool calls despite
+        // parallel_tool_calls: false, provide placeholder results for the
+        // extra ones so the conversation stays valid.
+        for extra_id in &decision.extra_tool_call_ids {
+            conversation.push_tool_result(
+                extra_id,
+                "Skipped: only one tool call is executed per turn.".to_string(),
+            );
+        }
 
         match decision.action {
             AgentAction::Shell { command } => {
