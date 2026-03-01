@@ -6,7 +6,7 @@
 //! 3. Interactive commands to test the coordination layer
 
 use aule_spacetimedb_client::*;
-use spacetimedb_sdk::{credentials, DbContext, Error, Identity, Table, TableWithPrimaryKey};
+use spacetimedb_sdk::{DbContext, Error, Identity, Table, TableWithPrimaryKey, credentials};
 
 const HOST: &str = "http://localhost:3000";
 const DB_NAME: &str = "aule";
@@ -74,10 +74,7 @@ fn on_disconnected(_ctx: &ErrorContext, err: Option<Error>) {
 fn register_callbacks(ctx: &DbConnection) {
     // Runtime events
     ctx.db.agent_runtime().on_insert(|_ctx, rt| {
-        println!(
-            "[runtime registered] {} (type={}, status={:?})",
-            rt.name, rt.agent_type_id, rt.status
-        );
+        println!("[runtime registered] {} (status={:?})", rt.name, rt.status);
     });
     ctx.db.agent_runtime().on_update(|_ctx, old, new| {
         if old.status != new.status {
@@ -168,10 +165,7 @@ fn on_sub_applied(ctx: &SubscriptionEventContext) {
     let runtimes: Vec<_> = ctx.db.agent_runtime().iter().collect();
     println!("Runtimes: {}", runtimes.len());
     for r in &runtimes {
-        println!(
-            "  {} - type={} status={:?}",
-            r.name, r.agent_type_id, r.status
-        );
+        println!("  {} - status={:?}", r.name, r.status);
     }
 
     let tasks: Vec<_> = ctx.db.agent_task().iter().collect();
@@ -210,7 +204,7 @@ fn print_help() {
     println!("  /type <name> <description>        - Create an agent type");
     println!("  /version <type_id> <ver> <prompt>  - Create a type version");
     println!("  /activate <version_id>             - Activate a version");
-    println!("  /register <name> <type_id>         - Register as a runtime");
+    println!("  /register <name>                   - Register as a runtime");
     println!("  /deregister                        - Deregister this runtime");
     println!("  /heartbeat                         - Send heartbeat");
     println!("  /task <type_id> <title> -- <desc>  - Create a task");
@@ -276,13 +270,11 @@ fn handle_command(ctx: &DbConnection, line: &str) -> Result<(), String> {
                 .map_err(|e| format!("{e}"))?;
         }
         "/register" => {
-            let parts: Vec<&str> = args.splitn(2, ' ').collect();
-            if parts.len() < 2 {
-                return Err("Usage: /register <name> <type_id>".into());
+            if args.trim().is_empty() {
+                return Err("Usage: /register <name>".into());
             }
-            let type_id: u64 = parts[1].parse().map_err(|_| "Invalid type_id")?;
             ctx.reducers
-                .register_runtime(parts[0].to_string(), type_id)
+                .register_runtime(args.trim().to_string())
                 .map_err(|e| format!("{e}"))?;
         }
         "/deregister" => {
@@ -376,10 +368,9 @@ fn handle_command(ctx: &DbConnection, line: &str) -> Result<(), String> {
             println!("--- Runtimes ---");
             for r in ctx.db.agent_runtime().iter() {
                 println!(
-                    "  {} ({:?}) type={} last_hb={}",
+                    "  {} ({:?}) last_hb={}",
                     r.name,
                     r.status,
-                    r.agent_type_id,
                     r.last_heartbeat.to_micros_since_unix_epoch()
                 );
             }

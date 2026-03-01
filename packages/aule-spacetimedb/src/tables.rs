@@ -3,9 +3,14 @@
 //! Tables are organized by domain:
 //! - Identity: agent_runtimes, agent_tasks
 //! - Agent Types: agent_types, agent_type_versions
-//! - Observations: observations
+//! - Runtime metadata: runtime_profiles, runtime_platform_info, runtime_resource_sample
+//! - Observations: observations, runtime_events
 
-use spacetimedb::{table, Identity, SpacetimeType, Timestamp};
+use spacetimedb::{table, Identity, ScheduleAt, SpacetimeType, Timestamp};
+
+use crate::reducers::{
+    runtime_events::prune_runtime_events, runtime_metadata::prune_runtime_resource_samples,
+};
 
 // ---------------------------------------------------------------------------
 // Identity domain
@@ -20,11 +25,68 @@ pub struct AgentRuntime {
     /// Human-readable name for this runtime instance (e.g. "builder-01").
     #[unique]
     pub name: String,
-    /// The agent type this runtime is configured to run.
-    pub agent_type_id: u64,
     pub status: RuntimeStatus,
     pub last_heartbeat: Timestamp,
     pub registered_at: Timestamp,
+}
+
+/// Stable runtime metadata that changes infrequently.
+#[table(accessor = runtime_profile, public)]
+pub struct RuntimeProfile {
+    #[primary_key]
+    pub runtime_identity: Identity,
+    /// Unique ID for this process instance.
+    pub runtime_instance_id: String,
+    pub runtime_name: String,
+    pub runtime_version: String,
+    pub git_sha: Option<String>,
+    pub hostname: Option<String>,
+    pub os: String,
+    pub arch: String,
+    pub started_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+/// Platform/deployment metadata for a runtime.
+///
+/// This is intentionally environment-agnostic: local and Docker runtimes can
+/// populate generic fields while K8s runtimes additionally populate pod fields.
+#[table(accessor = runtime_platform_info, public)]
+pub struct RuntimePlatformInfo {
+    #[primary_key]
+    pub runtime_identity: Identity,
+    pub environment: RuntimeEnvironment,
+    pub process_id: Option<u32>,
+    pub container_id: Option<String>,
+    pub image: Option<String>,
+    pub image_digest: Option<String>,
+    pub cluster: Option<String>,
+    pub namespace: Option<String>,
+    pub pod_name: Option<String>,
+    pub pod_uid: Option<String>,
+    pub node_name: Option<String>,
+    pub workload_kind: Option<String>,
+    pub workload_name: Option<String>,
+    pub container_name: Option<String>,
+    pub restart_count: Option<u32>,
+    pub updated_at: Timestamp,
+}
+
+/// High-frequency resource usage samples for a runtime.
+///
+/// Rows are pruned by the scheduled `prune_runtime_resource_samples` reducer.
+#[table(accessor = runtime_resource_sample, public)]
+pub struct RuntimeResourceSample {
+    #[auto_inc]
+    #[primary_key]
+    pub id: u64,
+    pub runtime_identity: Identity,
+    pub sampled_at: Timestamp,
+    pub cpu_millicores: Option<u32>,
+    pub memory_rss_bytes: u64,
+    pub memory_working_set_bytes: Option<u64>,
+    pub threads: Option<u32>,
+    pub open_fds: Option<u32>,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -37,6 +99,14 @@ pub enum RuntimeStatus {
     Draining,
     /// Disconnected or unresponsive.
     Offline,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum RuntimeEnvironment {
+    Local,
+    Docker,
+    K8S,
+    Unknown,
 }
 
 /// A task that can be assigned to an agent runtime.
@@ -158,4 +228,63 @@ pub enum ObservationKind {
     Error,
     /// The final result of the task.
     Result,
+}
+
+/// Internal runtime logs for task execution.
+///
+/// Unlike observations, these are optimized for verbose streaming/debug output
+/// and are intended for log viewers. Rows are pruned by the scheduled
+/// `prune_runtime_events` reducer.
+#[table(accessor = runtime_event, public)]
+pub struct RuntimeEvent {
+    #[primary_key]
+    pub id: String,
+    /// The task this event relates to.
+    pub task_id: u64,
+    /// The runtime that emitted this event.
+    pub runtime_identity: Identity,
+    /// Reasoning-loop turn number (1-based).
+    pub turn: u32,
+    pub event_type: RuntimeEventType,
+    /// Event payload. For streamed events this content may grow over time.
+    pub content: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum RuntimeEventType {
+    /// LLM assistant response content (streamed and updated in-place).
+    LlmResponse,
+    /// Final tool call chosen for this turn.
+    ToolCall,
+    /// Tool execution result payload.
+    ToolResult,
+    /// Full shell stdout/stderr payload.
+    ShellOutput,
+}
+
+/// Scheduler row for periodic runtime resource sample pruning.
+#[table(
+    accessor = runtime_resource_sample_prune_schedule,
+    scheduled(prune_runtime_resource_samples)
+)]
+pub struct RuntimeResourceSamplePruneSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub retention_seconds: u64,
+    pub prune_batch_size: u32,
+}
+
+/// Scheduler row for periodic runtime event pruning.
+#[table(accessor = runtime_event_prune_schedule, scheduled(prune_runtime_events))]
+pub struct RuntimeEventPruneSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub retention_seconds: u64,
+    pub prune_batch_size: u32,
 }
