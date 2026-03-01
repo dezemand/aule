@@ -28,7 +28,7 @@ When an agent picks up a task, task-scoped permissions and credentials activate.
 
 ## Auth Flow
 
-```
+```text
 1. Runtime pod starts
 2. Connects to SpacetimeDB
 3. Calls register_runtime reducer → gets an AgentRuntime row (status: "available")
@@ -106,7 +106,7 @@ pub struct Task {
     pub priority: String,              // "low", "normal", "high", "urgent"
     pub status: String,                // "created", "queued", "assigned", "running", "completed", "failed", "cancelled"
     pub max_attempts: u32,
-    pub budget_cents: Option<f64>,
+    pub budget_cents: Option<i64>,
     pub created_by: u64,               // → users
     pub created_at: u64,
     pub completed_at: Option<u64>,
@@ -137,13 +137,17 @@ pub fn post_observation(ctx: &ReducerContext, content: String, workspace_id: u64
     let task = get_active_task(ctx, agent.current_task_id)?;
 
     // Agent must belong to this workspace
-    assert!(agent.workspace_id == workspace_id);
+    if agent.workspace_id != workspace_id {
+        return Err("workspace mismatch".into());
+    }
 
     // Task must have observe permission
-    assert!(task_has_permission(&task, "observe"));
+    if !task_has_permission(&task, "observe") {
+        return Err("missing observe permission".into());
+    }
 
     // Proceed...
 }
 ```
 
-The key insight: the runtime is a generic worker. The agent gives it a personality. The task gives it permissions. This means the same pod can serve different agent types and different workspaces across its lifetime.
+The key insight: the runtime is a generic worker. The agent gives it a personality. The task gives it permissions. This means the same pod can serve different agent types across its lifetime. Runtimes are bound to a single workspace via their PVC mount — workspace isolation is enforced at the K8s level.

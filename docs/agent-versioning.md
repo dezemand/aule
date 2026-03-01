@@ -42,7 +42,7 @@ pub struct AgentTypeVersion {
 
 ## Version Lifecycle
 
-```
+```text
 draft → testing → active → deprecated → retired
 ```
 

@@ -25,7 +25,7 @@ The name comes from the Vala of craftsmanship in Tolkien's legendarium — the s
 
 ## Architecture Overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │  Aulë Platform                                                │
 │                                                                │
@@ -129,7 +129,7 @@ pub struct AgentTypeVersion {
 
 **Version lifecycle:**
 
-```
+```text
 draft → testing → active → deprecated → retired
 ```
 
@@ -194,7 +194,7 @@ pub struct Agent {
 
 **Agent launch flow:**
 
-```
+```text
 1. Launch request: agent_type_version_id + workspace_id
 2. System resolves required_capabilities from agent_type → agent_type_versions
 3. Finds available runtime in workspace with matching capabilities
@@ -240,7 +240,7 @@ pub struct Workspace {
 
 **Workspace filesystem layout:**
 
-```
+```text
 /workspace/
     ├── /repos/                ← cloned once, persists across agents
     ├── /cache/                ← build caches (target/, node_modules/)
@@ -294,7 +294,7 @@ pub struct Task {
     pub priority: String,              // "low", "normal", "high", "urgent"
     pub status: String,                // see lifecycle below
     pub max_attempts: u32,             // retry limit (default: 3)
-    pub budget_cents: Option<f64>,     // max spend for this task
+    pub budget_cents: Option<i64>,     // max spend for this task
     pub created_by: u64,               // → users
     pub created_at: u64,
     pub completed_at: Option<u64>,
@@ -303,7 +303,7 @@ pub struct Task {
 
 **Task status lifecycle:**
 
-```
+```text
 created → queued → assigned → running → completed
                                       → failed (all attempts exhausted or terminal)
                                       → cancelled (by human)
@@ -333,7 +333,7 @@ pub struct TaskAttempt {
     pub status: String,                // "running", "completed", "failed", "cancelled"
     pub failure_reason: Option<String>,// why it failed (context for next attempt)
     pub tokens_used: u64,
-    pub cost_cents: f64,
+    pub cost_cents: i64,
     pub started_at: u64,
     pub ended_at: Option<u64>,
 }
@@ -536,8 +536,8 @@ pub struct BudgetAllocation {
     pub workspace_id: Option<u64>,     // → workspaces (workspace-level budget)
     pub agent_type_id: Option<u64>,    // → agent_types (type-level budget)
     pub task_id: Option<u64>,          // → tasks (task-level budget)
-    pub allocated_cents: f64,
-    pub consumed_cents: f64,
+    pub allocated_cents: i64,
+    pub consumed_cents: i64,
     pub cycle: String,                 // "daily", "weekly", "monthly", "task" (one-time)
     pub replenished_at: u64,
 }
@@ -548,7 +548,7 @@ pub struct BudgetUsage {
     pub allocation_id: u64,            // → budget_allocations
     pub agent_id: u64,                 // → agents
     pub task_id: u64,                  // → tasks
-    pub cost_cents: f64,
+    pub cost_cents: i64,
     pub tokens: u64,
     pub provider: String,
     pub timestamp: u64,
@@ -713,7 +713,7 @@ pub struct LlmRequest {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub latency_ms: u64,
-    pub cost_cents: f64,
+    pub cost_cents: i64,
     pub success: bool,
     pub timestamp: u64,
 }
@@ -725,7 +725,7 @@ The router subscribes to `LlmProvider`, `RoutingRule`, `RateLimit`. Config chang
 
 ## Relationship Map
 
-```
+```text
 User
  ├── creates → Workspace
  ├── creates → Task
@@ -835,7 +835,7 @@ spec:
 
 ### Reconciliation
 
-```
+```text
 SpacetimeDB state change            → Operator action
 ──────────────────────────────────────────────────────
 Workspace created                    → Create PVC, NetworkPolicy, warm pods
@@ -858,7 +858,7 @@ A native Rust HTTP service (axum). Routes LLM requests from agents to the best p
 
 ### Standard API
 
-```
+```text
 POST /v1/completion
 {
     "task_type": "reason" | "generate" | "extract" | "classify" | "code" | "summarize" | "embed",
@@ -941,7 +941,7 @@ Data: `sqlite3`, `duckdb`
 
 ### Agent Process Loop
 
-```
+```text
 On launch:
   1. Receive agent_type_version_id from operator
   2. Connect to SpacetimeDB
@@ -976,7 +976,7 @@ On stop:
 
 ## Project Structure
 
-```
+```text
 aule/
 ├── packages/                              ← Rust workspace crates
 │   ├── aule-core/                         ← shared types across all components

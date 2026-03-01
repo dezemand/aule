@@ -96,7 +96,7 @@ CRUD for LLM providers and routing rules. Log LLM requests with latency, cost, s
 
 ## Module Source Layout
 
-```
+```text
 packages/aule-spacetimedb/
 └── src/
     ├── tables.rs              all SpacetimeDB table definitions

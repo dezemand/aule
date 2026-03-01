@@ -69,7 +69,7 @@ Layered approach based on agent needs:
 
 ## Runtime Startup Flow
 
-```
+```text
 1. Operator creates warm pod in workspace with PVC mounted
 2. Runtime process connects to SpacetimeDB
 3. Calls register_runtime reducer → gets AgentRuntime row (status: "available")
@@ -79,7 +79,7 @@ Layered approach based on agent needs:
 
 ## Agent Launch Flow
 
-```
+```text
 1. Launch request: agent_type_version_id + workspace_id
 2. System resolves required_capabilities from agent_type
 3. Finds available runtime in workspace with matching capabilities
@@ -91,7 +91,7 @@ Layered approach based on agent needs:
 
 ## Agent Process Loop (during task)
 
-```
+```text
 1. Receive task with description, context, budget
 2. Load relevant memory from workspace
 3. If retrying: load previous attempts' observations and failure reasons
@@ -110,7 +110,7 @@ Layered approach based on agent needs:
 
 ## Agent Stop Flow
 
-```
+```text
 1. Finish or abort current work
 2. Agent status → "stopped"
 3. Operator cleans scratch dir (/workspace/scratch/agent-{id}/)
@@ -120,7 +120,7 @@ Layered approach based on agent needs:
 
 ## Source Layout
 
-```
+```text
 packages/aule-runtime/
 └── src/
     ├── main.rs                lifecycle: boot, register, idle loop

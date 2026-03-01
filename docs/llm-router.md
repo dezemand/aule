@@ -4,7 +4,7 @@ A native Rust HTTP service (axum). Routes LLM requests from agents to the best p
 
 ## Standard API
 
-```
+```text
 POST /v1/completion
 {
     "task_type": "reason" | "generate" | "extract" | "classify" | "code" | "summarize" | "embed",
@@ -79,7 +79,7 @@ Cache entries have TTL and are invalidated on routing rule changes.
 
 ## Feedback Loop
 
-```
+```text
 Agent → Router → Provider → Response
                 |
                 v
@@ -98,7 +98,7 @@ Agent → Router → Provider → Response
 
 ## Source Layout
 
-```
+```text
 packages/aule-router/
 └── src/
     ├── server.rs              axum HTTP server
