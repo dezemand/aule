@@ -1,10 +1,10 @@
-import { useContext, useEffect, useState, useCallback } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
+import type { RowTypedQuery } from "spacetimedb";
 import {
   DbConnection,
   type ErrorContext,
   type SubscriptionEventContext,
 } from "../module_bindings";
-import type { RowTypedQuery } from "spacetimedb";
 import {
   SpacetimeContext,
   type SpacetimeContextValue,

@@ -10,6 +10,7 @@ import {
 import { SpacetimeProvider } from "./providers/spacetime";
 import { AppShell } from "./components/AppShell";
 import { DashboardPage } from "./routes/DashboardPage";
+import { TaskDetailsPage } from "./routes/TaskDetailsPage";
 import { TasksPage } from "./routes/TasksPage";
 import { AgentTypesPage } from "./routes/AgentTypesPage";
 
@@ -37,6 +38,12 @@ const tasksRoute = createRoute({
   component: TasksPage,
 });
 
+const taskDetailsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks/$taskId",
+  component: TaskDetailsPage,
+});
+
 const agentTypesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/agent-types",
@@ -46,6 +53,7 @@ const agentTypesRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   tasksRoute,
+  taskDetailsRoute,
   agentTypesRoute,
 ]);
 

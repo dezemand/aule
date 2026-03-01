@@ -9,17 +9,52 @@
 pub mod reducers;
 pub mod tables;
 
-use spacetimedb::{reducer, ReducerContext};
+use spacetimedb::{reducer, ReducerContext, Table};
 
-use tables::{agent_runtime, AgentRuntime, RuntimeStatus};
+use tables::{
+    agent_runtime, runtime_event_prune_schedule, runtime_resource_sample_prune_schedule,
+    AgentRuntime, RuntimeStatus,
+};
+
+const DEFAULT_RUNTIME_EVENT_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+const DEFAULT_RUNTIME_RESOURCE_SAMPLE_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+const DEFAULT_PRUNE_BATCH_SIZE: u32 = 500;
 
 // ---------------------------------------------------------------------------
 // Lifecycle hooks
 // ---------------------------------------------------------------------------
 
 #[reducer(init)]
-pub fn init(_ctx: &ReducerContext) {
+pub fn init(ctx: &ReducerContext) {
     log::info!("Aule module initialized (Phase 1)");
+
+    if ctx
+        .db
+        .runtime_event_prune_schedule()
+        .iter()
+        .next()
+        .is_none()
+    {
+        reducers::runtime_events::schedule_next_runtime_event_prune(
+            ctx,
+            DEFAULT_RUNTIME_EVENT_RETENTION_SECONDS,
+            DEFAULT_PRUNE_BATCH_SIZE,
+        );
+    }
+
+    if ctx
+        .db
+        .runtime_resource_sample_prune_schedule()
+        .iter()
+        .next()
+        .is_none()
+    {
+        reducers::runtime_metadata::schedule_next_runtime_resource_sample_prune(
+            ctx,
+            DEFAULT_RUNTIME_RESOURCE_SAMPLE_RETENTION_SECONDS,
+            DEFAULT_PRUNE_BATCH_SIZE,
+        );
+    }
 }
 
 #[reducer(client_connected)]

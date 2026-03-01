@@ -3,23 +3,13 @@
 use spacetimedb::{reducer, ReducerContext, Table};
 
 use crate::tables::{
-    agent_runtime, agent_task, agent_type, AgentRuntime, AgentTask, RuntimeStatus, TaskStatus,
+    agent_runtime, agent_task, AgentRuntime, AgentTask, RuntimeStatus, TaskStatus,
 };
 
 /// Register a new agent runtime. Called by an agent process after connecting.
-/// The runtime must specify its name and the agent type it will run.
 #[reducer]
-pub fn register_runtime(
-    ctx: &ReducerContext,
-    name: String,
-    agent_type_id: u64,
-) -> Result<(), String> {
+pub fn register_runtime(ctx: &ReducerContext, name: String) -> Result<(), String> {
     let sender = ctx.sender();
-
-    // Verify agent type exists
-    if ctx.db.agent_type().id().find(agent_type_id).is_none() {
-        return Err(format!("Agent type {agent_type_id} not found"));
-    }
 
     // Check not already registered
     if ctx.db.agent_runtime().identity().find(sender).is_some() {
@@ -39,7 +29,6 @@ pub fn register_runtime(
     ctx.db.agent_runtime().insert(AgentRuntime {
         identity: sender,
         name,
-        agent_type_id,
         status: RuntimeStatus::Idle,
         last_heartbeat: ctx.timestamp,
         registered_at: ctx.timestamp,

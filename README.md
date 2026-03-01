@@ -12,6 +12,7 @@ Named after the Vala of craftsmanship in Tolkien's legendarium -- the smith who 
 - [SpacetimeDB Module](docs/spacetimedb-module.md) -- tables, reducers, scheduled reducers
 - [LLM Router](docs/llm-router.md) -- multi-model routing, caching, feedback loop
 - [Agent Runtime](docs/agent-runtime.md) -- platform tools, shell safety, startup/execution flow
+- [Phase 2 Runbook](docs/phase-2-runbook.md) -- local runtime setup and end-to-end test steps
 - [Cross-Cutting Concerns](docs/cross-cutting.md) -- provenance, supervision, events, approvals, tools, UI
 - [Roadmap](docs/roadmap.md) -- phased delivery plan
 
