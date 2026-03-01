@@ -19,7 +19,7 @@ POST /v1/completion
     "context": {
         "agent_id": "...",
         "task_id": "...",
-        "project_id": "...",
+        "workspace_id": "...",
         "budget_remaining_cents": 450,
         "priority": "normal"
     },
@@ -29,19 +29,21 @@ POST /v1/completion
 
 ## Config from SpacetimeDB
 
-The router connects as a SpacetimeDB client and subscribes to `llm_providers`, `routing_rules`, `rate_limits`. Config changes propagate instantly -- no restarts. The router writes `llm_requests` entries back via reducer calls, creating a closed feedback loop.
+The router connects as a SpacetimeDB client and subscribes to `llm_providers`, `routing_rules`, `rate_limits`. Config changes propagate instantly — no restarts. The router writes `llm_requests` entries back via reducer calls, creating a closed feedback loop.
 
 ## Capabilities
 
-- **Task-based routing** -- reason->Opus, extract->Haiku, code->Sonnet
-- **Budget-aware degradation** -- low budget -> cheaper model automatically
-- **Latency-aware routing** -- slow provider -> skip
-- **Fallback chains** -- primary -> secondary -> retry queue
-- **Context-window routing** -- large context -> model that supports it
+- **Task-based routing** — reason → Opus, extract → Haiku, code → Sonnet
+- **Budget-aware degradation** — low budget → cheaper model automatically
+- **Latency-aware routing** — slow provider → skip
+- **Fallback chains** — primary → secondary → retry queue
+- **Context-window routing** — large context → model that supports it
 - **Exact-match and semantic caching**
 - **Tool format normalization** across providers
 - **Provider health tracking** with auto-disable on failure spikes
-- **Secrets management** -- from K8s Secrets / Vault (never in SpacetimeDB)
+- **Config from SpacetimeDB subscriptions** — no restarts for config changes
+- **Telemetry written back to SpacetimeDB** — closed feedback loop
+- **Secrets management** — from K8s Secrets / Vault (never in SpacetimeDB)
 
 ## Routing Logic
 
@@ -70,15 +72,15 @@ Each adapter normalizes the provider's API to the router's internal format, incl
 
 Two layers:
 
-- **Exact match** -- identical request (messages + constraints) returns cached response
-- **Semantic** -- similar requests (embedding similarity above threshold) can reuse responses
+- **Exact match** — identical request (messages + constraints) returns cached response
+- **Semantic** — similar requests (embedding similarity above threshold) can reuse responses
 
 Cache entries have TTL and are invalidated on routing rule changes.
 
 ## Feedback Loop
 
 ```
-Agent -> Router -> Provider -> Response
+Agent → Router → Provider → Response
                 |
                 v
         SpacetimeDB (llm_requests table)
@@ -91,7 +93,7 @@ Agent -> Router -> Provider -> Response
                 |
                 v
         Router subscriptions pick up changes
-        -> routing decisions adapt in real-time
+        → routing decisions adapt in real-time
 ```
 
 ## Source Layout

@@ -14,6 +14,12 @@ just publish
 just generate
 ```
 
+To publish with a clean database:
+
+```sh
+just publish -- --delete-data
+```
+
 ## 2) Build runtime
 
 ```sh
@@ -22,25 +28,25 @@ cargo build -p aule-runtime
 
 ## 3) Start runtime
 
-Export env vars in a new shell:
+Add runtime-specific vars to your `.env` (or export in a new shell):
 
 ```sh
-export SPACETIMEDB_URI="http://localhost:3000"
-export SPACETIMEDB_DB_NAME="aule"
-export AULE_RUNTIME_NAME="runtime-01"
-export AULE_AGENT_VERSION="0.1.0"
-export OPENAI_API_KEY="<your-api-key>"
-export OPENAI_MODEL="gpt-4.1-mini"
+AULE_RUNTIME_NAME="runtime-01"
+AULE_AGENT_VERSION="0.1.0"
+OPENAI_API_KEY="<your-api-key>"
+OPENAI_MODEL="gpt-4.1-mini"
 ```
+
+`SPACETIMEDB_URI` and `SPACETIMEDB_DB_NAME` are already in `.env` from the project setup.
 
 Optional tuning:
 
 ```sh
-export AULE_HEARTBEAT_SECONDS="10"
-export AULE_RESOURCE_SAMPLE_SECONDS="30"
-export AULE_SHELL_TIMEOUT_SECONDS="30"
-export AULE_SHELL_OUTPUT_LIMIT_BYTES="50000"
-export AULE_MAX_STEPS_PER_TASK="24"
+AULE_HEARTBEAT_SECONDS="10"
+AULE_RESOURCE_SAMPLE_SECONDS="30"
+AULE_SHELL_TIMEOUT_SECONDS="30"
+AULE_SHELL_OUTPUT_LIMIT_BYTES="50000"
+AULE_MAX_STEPS_PER_TASK="24"
 ```
 
 Run:
