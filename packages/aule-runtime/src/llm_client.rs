@@ -98,10 +98,15 @@ pub struct OpenAiClient {
 
 impl OpenAiClient {
     pub fn new(api_key: String, model: String, rt: tokio::runtime::Handle) -> Self {
+        let http = Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(120))
+            .build()
+            .expect("failed to build reqwest client");
         Self {
             api_key,
             model,
-            http: Client::new(),
+            http,
             rt,
         }
     }
@@ -189,7 +194,10 @@ impl OpenAiClient {
 
                 let chunk: SseChunk = match serde_json::from_str(data) {
                     Ok(c) => c,
-                    Err(_) => continue,
+                    Err(e) => {
+                        log::debug!("Skipping malformed SSE chunk: {e} — data: {data}");
+                        continue;
+                    }
                 };
 
                 let Some(choice) = chunk.choices.first() else {

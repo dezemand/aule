@@ -63,6 +63,20 @@ fn truncate_text(input: &str, max_bytes: usize) -> String {
     }
 
     let marker = "\n...[truncated]";
+
+    // When the limit is smaller than the marker itself, emit a
+    // best-effort truncated marker that fits within max_bytes.
+    if max_bytes < marker.len() {
+        let mut out = String::new();
+        for ch in marker.chars() {
+            if out.len() + ch.len_utf8() > max_bytes {
+                break;
+            }
+            out.push(ch);
+        }
+        return out;
+    }
+
     let mut out = String::new();
     for ch in input.chars() {
         if out.len() + ch.len_utf8() + marker.len() > max_bytes {
@@ -94,8 +108,10 @@ mod tests {
 
     #[test]
     fn truncates_to_just_marker_when_limit_smaller_than_marker() {
-        // max_bytes=4 is smaller than the 14-byte marker, so no content chars fit.
+        // max_bytes=4 is smaller than the 15-byte marker, so output is a
+        // best-effort truncation of the marker itself that fits in 4 bytes.
         let output = truncate_text("abcdef", 4);
-        assert_eq!(output, "\n...[truncated]");
+        assert_eq!(output, "\n...");
+        assert!(output.len() <= 4);
     }
 }
