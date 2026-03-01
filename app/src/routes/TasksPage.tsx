@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { useQuery, useSpacetime } from "../hooks/useSpacetime";
 import { Badge } from "../components/Badge";
 
@@ -155,6 +156,16 @@ export function TasksPage() {
                       Result: {t.result}
                     </span>
                   )}
+                </div>
+
+                <div className="mt-3">
+                  <Link
+                    to="/tasks/$taskId"
+                    params={{ taskId: t.id.toString() }}
+                    className="text-xs text-blue-400 hover:text-blue-300"
+                  >
+                    View details →
+                  </Link>
                 </div>
 
                 {/* Observations */}
