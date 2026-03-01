@@ -3,9 +3,9 @@
 //! Tables are organized by domain:
 //! - Identity: agent_runtimes, agent_tasks
 //! - Agent Types: agent_types, agent_type_versions
-//! - Observations: observations
+//! - Observations: observations, runtime_events
 
-use spacetimedb::{table, Identity, SpacetimeType, Timestamp};
+use spacetimedb::{Identity, SpacetimeType, Timestamp, table};
 
 // ---------------------------------------------------------------------------
 // Identity domain
@@ -158,4 +158,37 @@ pub enum ObservationKind {
     Error,
     /// The final result of the task.
     Result,
+}
+
+/// Internal runtime logs for task execution.
+///
+/// Unlike observations, these are optimized for verbose streaming/debug output
+/// and are intended for log viewers.
+#[table(accessor = runtime_event, public)]
+pub struct RuntimeEvent {
+    #[primary_key]
+    pub id: String,
+    /// The task this event relates to.
+    pub task_id: u64,
+    /// The runtime that emitted this event.
+    pub runtime_identity: Identity,
+    /// Reasoning-loop turn number (1-based).
+    pub turn: u32,
+    pub event_type: RuntimeEventType,
+    /// Event payload. For streamed events this content may grow over time.
+    pub content: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum RuntimeEventType {
+    /// LLM assistant response content (streamed and updated in-place).
+    LlmResponse,
+    /// Final tool call chosen for this turn.
+    ToolCall,
+    /// Tool execution result payload.
+    ToolResult,
+    /// Full shell stdout/stderr payload.
+    ShellOutput,
 }

@@ -1,18 +1,22 @@
 use std::{
+    sync::atomic::{AtomicU64, Ordering},
     sync::mpsc::{self, Receiver, Sender},
     time::{Duration, Instant},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use aule_spacetimedb_client::*;
 use log::{error, info, warn};
-use spacetimedb_sdk::{credentials, DbContext, Error, Identity, Table, TableWithPrimaryKey};
+use spacetimedb_sdk::{DbContext, Error, Identity, Table, TableWithPrimaryKey, credentials};
 
 use crate::{
     config::RuntimeConfig,
     llm_client::{AgentAction, Conversation, ObserveKind, OpenAiClient, StreamEvent},
     shell,
 };
+
+static RUNTIME_EVENT_SEQ: AtomicU64 = AtomicU64::new(1);
 
 pub fn run(config: RuntimeConfig) -> Result<()> {
     info!(
@@ -250,53 +254,86 @@ fn run_reasoning_loop(
     let mut conversation = Conversation::new(system_prompt, &initial_user_prompt);
 
     for turn in 1..=config.max_steps_per_task {
-        let task_id = task.id;
+        let llm_response_event_id = next_runtime_event_id(task.id, turn, "llm-response");
+        let mut llm_response_content = String::new();
 
-        // Stream the LLM response, emitting live progress observations
+        create_runtime_event(
+            ctx,
+            llm_response_event_id.clone(),
+            task.id,
+            turn,
+            RuntimeEventType::LlmResponse,
+            String::new(),
+        );
+
+        // Stream the LLM response and keep a growing runtime_event row.
         let decision = llm
-            .stream_tool_decision(&conversation, |event| {
-                match event {
-                    StreamEvent::TextDelta(text) => {
-                        // Model is thinking aloud -- post as progress observation
-                        post_observation(
-                            ctx,
-                            task_id,
-                            ObservationKind::Progress,
-                            format!("[turn {turn} thinking] {text}"),
-                        );
-                    }
-                    StreamEvent::ToolArgsDelta {
-                        tool_name,
-                        args_delta,
-                    } => {
-                        // Tool arguments are being built -- post as progress
-                        post_observation(
-                            ctx,
-                            task_id,
-                            ObservationKind::Progress,
-                            format!("[turn {turn} calling {tool_name}] {args_delta}"),
-                        );
-                    }
-                    StreamEvent::Done => {}
+            .stream_tool_decision(&conversation, |event| match event {
+                StreamEvent::TextDelta(text) => {
+                    llm_response_content.push_str(&text);
+                    update_runtime_event(
+                        ctx,
+                        llm_response_event_id.clone(),
+                        llm_response_content.clone(),
+                    );
                 }
+                StreamEvent::ToolArgsDelta {
+                    tool_name,
+                    args_delta,
+                } => {
+                    llm_response_content
+                        .push_str(&format!("\n[tool_args:{tool_name}] {args_delta}"));
+                    update_runtime_event(
+                        ctx,
+                        llm_response_event_id.clone(),
+                        llm_response_content.clone(),
+                    );
+                }
+                StreamEvent::Done => {}
             })
             .with_context(|| format!("LLM streaming failed at turn {turn}"))?;
 
         conversation.push_assistant_message(decision.assistant_message);
 
+        create_runtime_event(
+            ctx,
+            next_runtime_event_id(task.id, turn, "tool-call"),
+            task.id,
+            turn,
+            RuntimeEventType::ToolCall,
+            format!(
+                "tool_call_id={}\naction={:?}\nextra_tool_call_ids={:?}",
+                decision.tool_call_id, decision.action, decision.extra_tool_call_ids
+            ),
+        );
+
         // If the model returned multiple tool calls despite
         // parallel_tool_calls: false, provide placeholder results for the
         // extra ones so the conversation stays valid.
         for extra_id in &decision.extra_tool_call_ids {
-            conversation.push_tool_result(
-                extra_id,
-                "Skipped: only one tool call is executed per turn.".to_string(),
+            let placeholder = "Skipped: only one tool call is executed per turn.".to_string();
+            conversation.push_tool_result(extra_id, placeholder.clone());
+            create_runtime_event(
+                ctx,
+                next_runtime_event_id(task.id, turn, "tool-result-extra"),
+                task.id,
+                turn,
+                RuntimeEventType::ToolResult,
+                format!("tool_call_id={extra_id}\nresult={placeholder}"),
             );
         }
 
         match decision.action {
             AgentAction::Shell { command } => {
                 info!("task #{} turn {} sh: {}", task.id, turn, command);
+
+                post_observation(
+                    ctx,
+                    task.id,
+                    ObservationKind::Progress,
+                    format!("Running command: `{command}`"),
+                );
+
                 let result = shell::run_shell(
                     &command,
                     config.shell_timeout,
@@ -312,12 +349,53 @@ fn run_reasoning_loop(
                     result.stderr,
                 );
 
-                let kind = if result.timed_out || result.exit_code.unwrap_or(1) != 0 {
-                    ObservationKind::Error
+                create_runtime_event(
+                    ctx,
+                    next_runtime_event_id(task.id, turn, "shell-output"),
+                    task.id,
+                    turn,
+                    RuntimeEventType::ShellOutput,
+                    format!("command: {command}\n\n{outcome}"),
+                );
+
+                let (kind, summary) = if result.timed_out {
+                    (
+                        ObservationKind::Error,
+                        format!(
+                            "Command timed out after {}ms: `{command}`",
+                            result.duration_ms
+                        ),
+                    )
+                } else if result.exit_code.unwrap_or(1) != 0 {
+                    (
+                        ObservationKind::Error,
+                        format!(
+                            "Command failed (exit_code={:?}, {}ms): `{command}`",
+                            result.exit_code, result.duration_ms
+                        ),
+                    )
                 } else {
-                    ObservationKind::Finding
+                    (
+                        ObservationKind::Finding,
+                        format!("Command succeeded in {}ms: `{command}`", result.duration_ms),
+                    )
                 };
-                post_observation(ctx, task.id, kind, format!("sh `{command}`\n{outcome}"));
+                post_observation(ctx, task.id, kind, summary);
+
+                create_runtime_event(
+                    ctx,
+                    next_runtime_event_id(task.id, turn, "tool-result"),
+                    task.id,
+                    turn,
+                    RuntimeEventType::ToolResult,
+                    format!(
+                        "tool_call_id={}\nresult=exit_code={:?} timed_out={} duration_ms={}",
+                        decision.tool_call_id,
+                        result.exit_code,
+                        result.timed_out,
+                        result.duration_ms
+                    ),
+                );
 
                 // Feed full output back to conversation (not summarized)
                 conversation.push_tool_result(&decision.tool_call_id, outcome);
@@ -325,9 +403,18 @@ fn run_reasoning_loop(
             AgentAction::Observe { kind, content } => {
                 let obs_kind = observe_kind_to_observation_kind(&kind);
                 post_observation(ctx, task.id, obs_kind, content);
-                conversation.push_tool_result(
-                    &decision.tool_call_id,
-                    format!("observation posted ({})", kind.as_str()),
+                let tool_result = format!("observation posted ({})", kind.as_str());
+                conversation.push_tool_result(&decision.tool_call_id, tool_result.clone());
+                create_runtime_event(
+                    ctx,
+                    next_runtime_event_id(task.id, turn, "tool-result"),
+                    task.id,
+                    turn,
+                    RuntimeEventType::ToolResult,
+                    format!(
+                        "tool_call_id={}\nresult={tool_result}",
+                        decision.tool_call_id
+                    ),
                 );
             }
             AgentAction::Status { content } => {
@@ -337,11 +424,33 @@ fn run_reasoning_loop(
                     ObservationKind::Progress,
                     format!("status: {content}"),
                 );
-                conversation
-                    .push_tool_result(&decision.tool_call_id, "status recorded".to_string());
+                let tool_result = "status recorded".to_string();
+                conversation.push_tool_result(&decision.tool_call_id, tool_result.clone());
+                create_runtime_event(
+                    ctx,
+                    next_runtime_event_id(task.id, turn, "tool-result"),
+                    task.id,
+                    turn,
+                    RuntimeEventType::ToolResult,
+                    format!(
+                        "tool_call_id={}\nresult={tool_result}",
+                        decision.tool_call_id
+                    ),
+                );
             }
             AgentAction::Finish { result } => {
                 post_observation(ctx, task.id, ObservationKind::Result, result.clone());
+                create_runtime_event(
+                    ctx,
+                    next_runtime_event_id(task.id, turn, "tool-result"),
+                    task.id,
+                    turn,
+                    RuntimeEventType::ToolResult,
+                    format!(
+                        "tool_call_id={}\nresult=task completed",
+                        decision.tool_call_id
+                    ),
+                );
                 ctx.reducers
                     .complete_task(task.id, result)
                     .with_context(|| format!("Failed to complete task {}", task.id))?;
@@ -350,6 +459,14 @@ fn run_reasoning_loop(
             }
             AgentAction::Fail { error } => {
                 post_observation(ctx, task.id, ObservationKind::Error, error.clone());
+                create_runtime_event(
+                    ctx,
+                    next_runtime_event_id(task.id, turn, "tool-result"),
+                    task.id,
+                    turn,
+                    RuntimeEventType::ToolResult,
+                    format!("tool_call_id={}\nresult=task failed", decision.tool_call_id),
+                );
                 ctx.reducers
                     .fail_task(task.id, error)
                     .with_context(|| format!("Failed to mark task {} as failed", task.id))?;
@@ -375,6 +492,38 @@ fn post_observation(ctx: &DbConnection, task_id: u64, kind: ObservationKind, con
     if let Err(err) = ctx.reducers.post_observation(task_id, kind, content) {
         warn!("post_observation failed for task {task_id}: {err} (content_len={content_len})");
     }
+}
+
+fn create_runtime_event(
+    ctx: &DbConnection,
+    id: String,
+    task_id: u64,
+    turn: u32,
+    event_type: RuntimeEventType,
+    content: String,
+) {
+    if let Err(err) =
+        ctx.reducers
+            .create_runtime_event(id.clone(), task_id, turn, event_type, content)
+    {
+        warn!("create_runtime_event failed for task {task_id} ({id}): {err}");
+    }
+}
+
+fn update_runtime_event(ctx: &DbConnection, id: String, content: String) {
+    let content_len = content.len();
+    if let Err(err) = ctx.reducers.update_runtime_event(id.clone(), content) {
+        warn!("update_runtime_event failed for {id}: {err} (content_len={content_len})");
+    }
+}
+
+fn next_runtime_event_id(task_id: u64, turn: u32, label: &str) -> String {
+    let seq = RUNTIME_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("task-{task_id}-turn-{turn}-{label}-{ts_ms}-{seq}")
 }
 
 fn observe_kind_to_observation_kind(kind: &ObserveKind) -> ObservationKind {

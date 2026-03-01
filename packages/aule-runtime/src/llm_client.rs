@@ -145,7 +145,7 @@ impl OpenAiClient {
     }
 
     /// Stream a tool decision from OpenAI. Calls `on_event` with buffered
-    /// deltas (~250 ms) so the caller can emit live observations without
+    /// deltas (~250 ms) so the caller can persist live runtime logs without
     /// flooding SpacetimeDB.
     pub fn stream_tool_decision(
         &self,
@@ -610,8 +610,8 @@ mod tests {
 
     #[test]
     fn errors_on_invalid_observe_kind() {
-        let err =
-            action_from_tool_call("aule_observe", r#"{"kind":"bogus","content":"hi"}"#).unwrap_err();
+        let err = action_from_tool_call("aule_observe", r#"{"kind":"bogus","content":"hi"}"#)
+            .unwrap_err();
         assert!(err.to_string().contains("Invalid aule_observe kind"));
     }
 
