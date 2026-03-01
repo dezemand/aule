@@ -15,7 +15,7 @@ use spacetimedb_sdk::{DbContext, Error, Identity, Table, TableWithPrimaryKey, cr
 
 use crate::{
     config::RuntimeConfig,
-    llm_client::{AgentAction, Conversation, ObserveKind, OpenAiClient, StreamEvent},
+    llm_client::{AgentAction, Conversation, ObserveKind, OpenAiClient, StreamEvent, ToolCall},
     shell,
 };
 
@@ -64,6 +64,12 @@ struct RuntimeResourceSamplePayload {
     memory_working_set_bytes: Option<u64>,
     threads: Option<u32>,
     open_fds: Option<u32>,
+}
+
+struct IndexedToolCall {
+    index: usize,
+    tool_call_id: String,
+    action: AgentAction,
 }
 
 pub fn run(config: RuntimeConfig) -> Result<()> {
@@ -689,7 +695,7 @@ fn run_reasoning_loop(
         );
 
         // Stream the LLM response and keep a growing runtime_event row.
-        let decision = llm
+        let decision_set = llm
             .stream_tool_decision(&conversation, |event| match event {
                 StreamEvent::TextDelta(text) => {
                     llm_response_content.push_str(&text);
@@ -715,185 +721,147 @@ fn run_reasoning_loop(
             })
             .with_context(|| format!("LLM streaming failed at turn {turn}"))?;
 
-        conversation.push_assistant_message(decision.assistant_message);
+        conversation.push_assistant_message(decision_set.assistant_message);
 
-        create_runtime_event(
-            ctx,
-            next_runtime_event_id(task.id, turn, "tool-call"),
-            task.id,
-            turn,
-            RuntimeEventType::ToolCall,
-            format!(
-                "tool_call_id={}\naction={:?}\nextra_tool_call_ids={:?}",
-                decision.tool_call_id, decision.action, decision.extra_tool_call_ids
-            ),
-        );
+        let mut executable_calls = Vec::new();
+        let mut terminal_calls = Vec::new();
 
-        // If the model returned multiple tool calls despite
-        // parallel_tool_calls: false, provide placeholder results for the
-        // extra ones so the conversation stays valid.
-        for extra_id in &decision.extra_tool_call_ids {
-            let placeholder = "Skipped: only one tool call is executed per turn.".to_string();
-            conversation.push_tool_result(extra_id, placeholder.clone());
+        for (
+            index,
+            ToolCall {
+                tool_call_id,
+                action,
+            },
+        ) in decision_set.tool_calls.into_iter().enumerate()
+        {
             create_runtime_event(
                 ctx,
-                next_runtime_event_id(task.id, turn, "tool-result-extra"),
+                next_runtime_event_id(task.id, turn, &format!("tool-call-{index}")),
                 task.id,
                 turn,
-                RuntimeEventType::ToolResult,
-                format!("tool_call_id={extra_id}\nresult={placeholder}"),
+                RuntimeEventType::ToolCall,
+                format!("tool_call_id={tool_call_id}\naction={action:?}"),
             );
+
+            let call = IndexedToolCall {
+                index,
+                tool_call_id,
+                action,
+            };
+
+            if matches!(
+                &call.action,
+                AgentAction::Finish { .. } | AgentAction::Fail { .. }
+            ) {
+                terminal_calls.push(call);
+            } else {
+                executable_calls.push(call);
+            }
         }
 
-        match decision.action {
-            AgentAction::Shell { command } => {
-                info!("task #{} turn {} sh: {}", task.id, turn, command);
+        let mut tool_results =
+            execute_non_terminal_tool_calls(ctx, config, task.id, turn, executable_calls);
+        tool_results.sort_by_key(|(index, _, _)| *index);
 
-                post_observation(
-                    ctx,
-                    task.id,
-                    ObservationKind::Progress,
-                    format!("Running command: `{command}`"),
-                );
+        for (_, tool_call_id, tool_result) in tool_results {
+            conversation.push_tool_result(&tool_call_id, tool_result);
+        }
 
-                let result = shell::run_shell(
-                    &command,
-                    config.shell_timeout,
-                    config.shell_output_limit_bytes,
-                )?;
+        let selected_terminal_index = terminal_calls
+            .iter()
+            .find(|call| matches!(&call.action, AgentAction::Finish { .. }))
+            .map(|call| call.index)
+            .or_else(|| {
+                terminal_calls
+                    .iter()
+                    .find(|call| matches!(&call.action, AgentAction::Fail { .. }))
+                    .map(|call| call.index)
+            });
 
-                let outcome = format!(
-                    "exit_code={:?} timed_out={} duration_ms={}\nstdout:\n{}\nstderr:\n{}",
-                    result.exit_code,
-                    result.timed_out,
-                    result.duration_ms,
-                    result.stdout,
-                    result.stderr,
-                );
-
+        for call in &terminal_calls {
+            if Some(call.index) != selected_terminal_index {
+                let skipped = "Skipped: another terminal action was prioritized.".to_string();
+                conversation.push_tool_result(&call.tool_call_id, skipped.clone());
                 create_runtime_event(
                     ctx,
-                    next_runtime_event_id(task.id, turn, "shell-output"),
+                    next_runtime_event_id(task.id, turn, &format!("tool-{}-result", call.index)),
                     task.id,
                     turn,
-                    RuntimeEventType::ShellOutput,
-                    format!("command: {command}\n\n{outcome}"),
+                    RuntimeEventType::ToolResult,
+                    format!("tool_call_id={}\nresult={skipped}", call.tool_call_id),
                 );
+            }
+        }
 
-                let (kind, summary) = if result.timed_out {
-                    (
-                        ObservationKind::Error,
-                        format!(
-                            "Command timed out after {}ms: `{command}`",
-                            result.duration_ms
+        if let Some(terminal_index) = selected_terminal_index {
+            let Some(terminal_call) = terminal_calls
+                .into_iter()
+                .find(|call| call.index == terminal_index)
+            else {
+                warn!(
+                    "Selected terminal index {} missing for task {} turn {}",
+                    terminal_index, task.id, turn
+                );
+                continue;
+            };
+
+            match terminal_call.action {
+                AgentAction::Finish { result } => {
+                    post_observation(ctx, task.id, ObservationKind::Result, result.clone());
+                    let tool_result = "task completed".to_string();
+                    conversation.push_tool_result(&terminal_call.tool_call_id, tool_result.clone());
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(
+                            task.id,
+                            turn,
+                            &format!("tool-{terminal_index}-result"),
                         ),
-                    )
-                } else if result.exit_code.unwrap_or(1) != 0 {
-                    (
-                        ObservationKind::Error,
+                        task.id,
+                        turn,
+                        RuntimeEventType::ToolResult,
                         format!(
-                            "Command failed (exit_code={:?}, {}ms): `{command}`",
-                            result.exit_code, result.duration_ms
+                            "tool_call_id={}\nresult={tool_result}",
+                            terminal_call.tool_call_id
                         ),
-                    )
-                } else {
-                    (
-                        ObservationKind::Finding,
-                        format!("Command succeeded in {}ms: `{command}`", result.duration_ms),
-                    )
-                };
-                post_observation(ctx, task.id, kind, summary);
-
-                create_runtime_event(
-                    ctx,
-                    next_runtime_event_id(task.id, turn, "tool-result"),
-                    task.id,
-                    turn,
-                    RuntimeEventType::ToolResult,
-                    format!(
-                        "tool_call_id={}\nresult=exit_code={:?} timed_out={} duration_ms={}",
-                        decision.tool_call_id,
-                        result.exit_code,
-                        result.timed_out,
-                        result.duration_ms
-                    ),
-                );
-
-                // Feed full output back to conversation (not summarized)
-                conversation.push_tool_result(&decision.tool_call_id, outcome);
-            }
-            AgentAction::Observe { kind, content } => {
-                let obs_kind = observe_kind_to_observation_kind(&kind);
-                post_observation(ctx, task.id, obs_kind, content);
-                let tool_result = format!("observation posted ({})", kind.as_str());
-                conversation.push_tool_result(&decision.tool_call_id, tool_result.clone());
-                create_runtime_event(
-                    ctx,
-                    next_runtime_event_id(task.id, turn, "tool-result"),
-                    task.id,
-                    turn,
-                    RuntimeEventType::ToolResult,
-                    format!(
-                        "tool_call_id={}\nresult={tool_result}",
-                        decision.tool_call_id
-                    ),
-                );
-            }
-            AgentAction::Status { content } => {
-                post_observation(
-                    ctx,
-                    task.id,
-                    ObservationKind::Progress,
-                    format!("status: {content}"),
-                );
-                let tool_result = "status recorded".to_string();
-                conversation.push_tool_result(&decision.tool_call_id, tool_result.clone());
-                create_runtime_event(
-                    ctx,
-                    next_runtime_event_id(task.id, turn, "tool-result"),
-                    task.id,
-                    turn,
-                    RuntimeEventType::ToolResult,
-                    format!(
-                        "tool_call_id={}\nresult={tool_result}",
-                        decision.tool_call_id
-                    ),
-                );
-            }
-            AgentAction::Finish { result } => {
-                post_observation(ctx, task.id, ObservationKind::Result, result.clone());
-                create_runtime_event(
-                    ctx,
-                    next_runtime_event_id(task.id, turn, "tool-result"),
-                    task.id,
-                    turn,
-                    RuntimeEventType::ToolResult,
-                    format!(
-                        "tool_call_id={}\nresult=task completed",
-                        decision.tool_call_id
-                    ),
-                );
-                ctx.reducers
-                    .complete_task(task.id, result)
-                    .with_context(|| format!("Failed to complete task {}", task.id))?;
-                info!("Completed task #{}", task.id);
-                return Ok(());
-            }
-            AgentAction::Fail { error } => {
-                post_observation(ctx, task.id, ObservationKind::Error, error.clone());
-                create_runtime_event(
-                    ctx,
-                    next_runtime_event_id(task.id, turn, "tool-result"),
-                    task.id,
-                    turn,
-                    RuntimeEventType::ToolResult,
-                    format!("tool_call_id={}\nresult=task failed", decision.tool_call_id),
-                );
-                ctx.reducers
-                    .fail_task(task.id, error)
-                    .with_context(|| format!("Failed to mark task {} as failed", task.id))?;
-                info!("Marked task #{} as failed", task.id);
-                return Ok(());
+                    );
+                    ctx.reducers
+                        .complete_task(task.id, result)
+                        .with_context(|| format!("Failed to complete task {}", task.id))?;
+                    info!("Completed task #{}", task.id);
+                    return Ok(());
+                }
+                AgentAction::Fail { error } => {
+                    post_observation(ctx, task.id, ObservationKind::Error, error.clone());
+                    let tool_result = "task failed".to_string();
+                    conversation.push_tool_result(&terminal_call.tool_call_id, tool_result.clone());
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(
+                            task.id,
+                            turn,
+                            &format!("tool-{terminal_index}-result"),
+                        ),
+                        task.id,
+                        turn,
+                        RuntimeEventType::ToolResult,
+                        format!(
+                            "tool_call_id={}\nresult={tool_result}",
+                            terminal_call.tool_call_id
+                        ),
+                    );
+                    ctx.reducers
+                        .fail_task(task.id, error)
+                        .with_context(|| format!("Failed to mark task {} as failed", task.id))?;
+                    info!("Marked task #{} as failed", task.id);
+                    return Ok(());
+                }
+                _ => {
+                    warn!(
+                        "Unexpected non-terminal action selected as terminal in task {} turn {}",
+                        task.id, turn
+                    );
+                }
             }
         }
     }
@@ -907,6 +875,217 @@ fn run_reasoning_loop(
         .fail_task(task.id, msg)
         .with_context(|| format!("Failed to fail task {} after max steps", task.id))?;
     Ok(())
+}
+
+fn execute_non_terminal_tool_calls(
+    ctx: &DbConnection,
+    config: &RuntimeConfig,
+    task_id: u64,
+    turn: u32,
+    executable_calls: Vec<IndexedToolCall>,
+) -> Vec<(usize, String, String)> {
+    let mut tool_results = Vec::new();
+    let shell_timeout = config.shell_timeout;
+    let shell_output_limit_bytes = config.shell_output_limit_bytes;
+
+    thread::scope(|scope| {
+        let mut shell_jobs = Vec::new();
+
+        for call in executable_calls {
+            let IndexedToolCall {
+                index,
+                tool_call_id,
+                action,
+            } = call;
+
+            match action {
+                AgentAction::Shell { command } => {
+                    info!("task #{} turn {} sh[{}]: {}", task_id, turn, index, command);
+
+                    post_observation(
+                        ctx,
+                        task_id,
+                        ObservationKind::Progress,
+                        format!("Running command: `{command}`"),
+                    );
+
+                    let command_for_thread = command.clone();
+                    let handle = scope.spawn(move || {
+                        let run_result = shell::run_shell(
+                            &command_for_thread,
+                            shell_timeout,
+                            shell_output_limit_bytes,
+                        );
+                        (command_for_thread, run_result)
+                    });
+
+                    shell_jobs.push((index, tool_call_id, command, handle));
+                }
+                AgentAction::Observe { kind, content } => {
+                    let obs_kind = observe_kind_to_observation_kind(&kind);
+                    post_observation(ctx, task_id, obs_kind, content);
+                    let tool_result = format!("observation posted ({})", kind.as_str());
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ToolResult,
+                        format!("tool_call_id={tool_call_id}\nresult={tool_result}"),
+                    );
+                    tool_results.push((index, tool_call_id, tool_result));
+                }
+                AgentAction::Status { content } => {
+                    post_observation(
+                        ctx,
+                        task_id,
+                        ObservationKind::Progress,
+                        format!("status: {content}"),
+                    );
+                    let tool_result = "status recorded".to_string();
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ToolResult,
+                        format!("tool_call_id={tool_call_id}\nresult={tool_result}"),
+                    );
+                    tool_results.push((index, tool_call_id, tool_result));
+                }
+                AgentAction::Finish { .. } | AgentAction::Fail { .. } => {
+                    warn!(
+                        "execute_non_terminal_tool_calls received terminal action at index {}",
+                        index
+                    );
+                }
+            }
+        }
+
+        for (index, tool_call_id, command, handle) in shell_jobs {
+            let (returned_command, shell_result) = match handle.join() {
+                Ok(v) => v,
+                Err(_) => {
+                    let panic_result = "shell execution panicked".to_string();
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-shell-output")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ShellOutput,
+                        format!("command: {command}\n\nerror: {panic_result}"),
+                    );
+                    post_observation(
+                        ctx,
+                        task_id,
+                        ObservationKind::Error,
+                        format!("Command execution panicked: `{command}`"),
+                    );
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ToolResult,
+                        format!("tool_call_id={tool_call_id}\nresult={panic_result}"),
+                    );
+                    tool_results.push((index, tool_call_id, panic_result));
+                    continue;
+                }
+            };
+
+            match shell_result {
+                Ok(result) => {
+                    let outcome = format!(
+                        "exit_code={:?} timed_out={} duration_ms={}\nstdout:\n{}\nstderr:\n{}",
+                        result.exit_code,
+                        result.timed_out,
+                        result.duration_ms,
+                        result.stdout,
+                        result.stderr,
+                    );
+
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-shell-output")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ShellOutput,
+                        format!("command: {returned_command}\n\n{outcome}"),
+                    );
+
+                    let (kind, summary) = if result.timed_out {
+                        (
+                            ObservationKind::Error,
+                            format!(
+                                "Command timed out after {}ms: `{returned_command}`",
+                                result.duration_ms
+                            ),
+                        )
+                    } else if result.exit_code.unwrap_or(1) != 0 {
+                        (
+                            ObservationKind::Error,
+                            format!(
+                                "Command failed (exit_code={:?}, {}ms): `{returned_command}`",
+                                result.exit_code, result.duration_ms
+                            ),
+                        )
+                    } else {
+                        (
+                            ObservationKind::Finding,
+                            format!(
+                                "Command succeeded in {}ms: `{returned_command}`",
+                                result.duration_ms
+                            ),
+                        )
+                    };
+                    post_observation(ctx, task_id, kind, summary);
+
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ToolResult,
+                        format!(
+                            "tool_call_id={tool_call_id}\nresult=exit_code={:?} timed_out={} duration_ms={}",
+                            result.exit_code, result.timed_out, result.duration_ms
+                        ),
+                    );
+
+                    tool_results.push((index, tool_call_id, outcome));
+                }
+                Err(err) => {
+                    let err_text = format!("shell execution error: {err:#}");
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-shell-output")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ShellOutput,
+                        format!("command: {returned_command}\n\nerror: {err_text}"),
+                    );
+                    post_observation(
+                        ctx,
+                        task_id,
+                        ObservationKind::Error,
+                        format!("Failed to run command `{returned_command}`: {err:#}"),
+                    );
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ToolResult,
+                        format!("tool_call_id={tool_call_id}\nresult={err_text}"),
+                    );
+                    tool_results.push((index, tool_call_id, err_text));
+                }
+            }
+        }
+    });
+
+    tool_results
 }
 
 fn post_observation(ctx: &DbConnection, task_id: u64, kind: ObservationKind, content: String) {

@@ -110,13 +110,15 @@ pub enum StreamEvent {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub struct ToolDecision {
-    pub assistant_message: Value,
+pub struct ToolCall {
     pub tool_call_id: String,
     pub action: AgentAction,
-    /// IDs of additional tool calls the model made in the same turn.
-    /// The caller must provide tool results for these (OpenAI requires it).
-    pub extra_tool_call_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolDecisionSet {
+    pub assistant_message: Value,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +155,7 @@ impl OpenAiClient {
         &self,
         conversation: &Conversation,
         mut on_event: impl FnMut(StreamEvent),
-    ) -> Result<ToolDecision> {
+    ) -> Result<ToolDecisionSet> {
         self.rt
             .block_on(self.stream_inner(conversation, &mut on_event))
     }
@@ -162,7 +164,7 @@ impl OpenAiClient {
         &self,
         conversation: &Conversation,
         on_event: &mut dyn FnMut(StreamEvent),
-    ) -> Result<ToolDecision> {
+    ) -> Result<ToolDecisionSet> {
         let body = json!({
             "model": self.model,
             "temperature": 0.1,
@@ -170,7 +172,7 @@ impl OpenAiClient {
             "messages": conversation.messages(),
             "tools": tool_definitions(),
             "tool_choice": "required",
-            "parallel_tool_calls": false,
+            "parallel_tool_calls": true,
         });
 
         let response = self
@@ -346,13 +348,24 @@ impl OpenAiClient {
             bail!("OpenAI stream completed without a tool call");
         }
 
-        // Use the first tool call as the action to execute this turn.
-        let (ref tc_id, ref tc_name, ref tc_args) = tool_calls[0];
-        if tc_id.is_empty() || tc_name.is_empty() {
-            bail!("OpenAI stream completed with an incomplete tool call");
-        }
-
-        let action = action_from_tool_call(tc_name, tc_args)?;
+        let parsed_tool_calls: Vec<ToolCall> = tool_calls
+            .iter()
+            .enumerate()
+            .map(|(idx, (id, name, args))| {
+                if id.trim().is_empty() || name.trim().is_empty() {
+                    bail!(
+                        "OpenAI stream completed with an incomplete tool call at index {}",
+                        idx
+                    );
+                }
+                let action = action_from_tool_call(name, args)
+                    .with_context(|| format!("Failed to parse tool call at index {idx}"))?;
+                Ok(ToolCall {
+                    tool_call_id: id.clone(),
+                    action,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         on_event(StreamEvent::Done);
 
         // Build the assistant message including ALL tool calls for correct
@@ -377,25 +390,9 @@ impl OpenAiClient {
             "tool_calls": tool_calls_json,
         });
 
-        // Collect the extra tool call IDs so the caller can provide
-        // placeholder tool results for them (required by OpenAI).
-        let extra_tool_call_ids: Vec<String> = tool_calls[1..]
-            .iter()
-            .filter_map(|(id, _, _)| {
-                let id = id.trim();
-                if id.is_empty() {
-                    None
-                } else {
-                    Some(id.to_string())
-                }
-            })
-            .collect();
-
-        Ok(ToolDecision {
+        Ok(ToolDecisionSet {
             assistant_message,
-            tool_call_id: tc_id.clone(),
-            action,
-            extra_tool_call_ids,
+            tool_calls: parsed_tool_calls,
         })
     }
 }
