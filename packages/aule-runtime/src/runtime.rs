@@ -8,10 +8,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use aule_spacetimedb_client::*;
 use log::{error, info, warn};
-use spacetimedb_sdk::{DbContext, Error, Identity, Table, TableWithPrimaryKey, credentials};
+use spacetimedb_sdk::{credentials, DbContext, Error, Identity, Table, TableWithPrimaryKey};
 
 use crate::{
     config::RuntimeConfig,
@@ -1117,5 +1117,56 @@ fn observe_kind_to_observation_kind(kind: &ObserveKind) -> ObservationKind {
         ObserveKind::Finding => ObservationKind::Finding,
         ObserveKind::Error => ObservationKind::Error,
         ObserveKind::Result => ObservationKind::Result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use anyhow::{anyhow, Result};
+
+    use super::{is_retryable_reducer_error, retry_reducer};
+
+    #[test]
+    fn retryable_reducer_error_classifier_handles_permanent_and_transient_errors() {
+        let permanent = anyhow!("Task is Running, can only start Assigned tasks");
+        assert!(!is_retryable_reducer_error(&permanent));
+
+        let transient = anyhow!("connection timed out while sending reducer request");
+        assert!(is_retryable_reducer_error(&transient));
+
+        let unknown = anyhow!("unexpected reducer failure in downstream handler");
+        assert!(!is_retryable_reducer_error(&unknown));
+    }
+
+    #[test]
+    fn retry_reducer_stops_immediately_for_non_retryable_errors() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<()> = retry_reducer("start_task", || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err(anyhow!("Task is Running, can only start Assigned tasks"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retry_reducer_retries_transient_errors_then_succeeds() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<u32> = retry_reducer("complete_task", || {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt < 2 {
+                Err(anyhow!(
+                    "connection timed out while sending reducer request"
+                ))
+            } else {
+                Ok(42)
+            }
+        });
+
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 }

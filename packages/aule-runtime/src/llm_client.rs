@@ -741,7 +741,12 @@ struct FailArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentAction, Conversation, ObserveKind, action_from_tool_call};
+    use reqwest::StatusCode;
+
+    use super::{
+        AgentAction, Conversation, ObserveKind, action_from_tool_call, compute_retry_delay_ms,
+        is_retryable_http_status,
+    };
 
     #[test]
     fn parses_sh_tool_call() {
@@ -809,5 +814,30 @@ mod tests {
         convo.push_tool_result("call_123", "result text".to_string());
         assert_eq!(convo.messages().len(), 4);
         assert_eq!(convo.messages()[3]["tool_call_id"], "call_123");
+    }
+
+    #[test]
+    fn retryable_http_statuses_are_classified_correctly() {
+        assert!(is_retryable_http_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(is_retryable_http_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(is_retryable_http_status(StatusCode::BAD_GATEWAY));
+        assert!(is_retryable_http_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(is_retryable_http_status(StatusCode::GATEWAY_TIMEOUT));
+
+        assert!(!is_retryable_http_status(StatusCode::BAD_REQUEST));
+        assert!(!is_retryable_http_status(StatusCode::UNAUTHORIZED));
+        assert!(!is_retryable_http_status(StatusCode::FORBIDDEN));
+    }
+
+    #[test]
+    fn retry_delay_respects_bounds() {
+        let base_ms = 1_000;
+        let max_ms = 10_000;
+        let delay_attempt_0 = compute_retry_delay_ms(base_ms, max_ms, 0);
+        assert!((1_000..=1_499).contains(&delay_attempt_0));
+
+        let delay_large_attempt = compute_retry_delay_ms(base_ms, max_ms, 8);
+        assert!(delay_large_attempt <= max_ms);
+        assert!(delay_large_attempt > 0);
     }
 }
