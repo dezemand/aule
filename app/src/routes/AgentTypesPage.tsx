@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { useQuery, useSpacetime } from "../hooks/useSpacetime";
+import { useCallback, useState } from "react";
+import { useQuery, useSpacetime, useSubscription } from "../hooks/useSpacetime";
 import { Badge } from "../components/Badge";
+import { tables } from "../module_bindings";
 
 function versionStatusColor(tag: string): string {
   switch (tag) {
@@ -19,20 +20,32 @@ function versionStatusColor(tag: string): string {
   }
 }
 
+const QUERY = [
+  tables.agent_type,
+  tables.agent_type_version,
+  tables.agent_runtime,
+];
+
 export function AgentTypesPage() {
-  const { conn, subscribed } = useSpacetime();
+  const { ctx } = useSpacetime();
+  const sub = useSubscription(
+    QUERY,
+    useCallback(
+      (db) => [db.agent_type, db.agent_type_version, db.agent_runtime],
+      [],
+    ),
+  );
+  const agentTypes = useQuery(sub, (db) => Array.from(db.agent_type.iter()));
+  const versions = useQuery(sub, (db) =>
+    Array.from(db.agent_type_version.iter()),
+  );
+  const runtimes = useQuery(sub, (db) => Array.from(db.agent_runtime.iter()));
   const [showCreateType, setShowCreateType] = useState(false);
   const [showCreateVersion, setShowCreateVersion] = useState<bigint | null>(
-    null
+    null,
   );
 
-  const agentTypes = useQuery((db) => Array.from(db.agent_type.iter()));
-  const versions = useQuery((db) =>
-    Array.from(db.agent_type_version.iter())
-  );
-  const runtimes = useQuery((db) => Array.from(db.agent_runtime.iter()));
-
-  if (!subscribed) {
+  if (!sub.subscribed) {
     return (
       <div className="flex h-full items-center justify-center text-gray-500">
         Waiting for SpacetimeDB connection...
@@ -50,7 +63,7 @@ export function AgentTypesPage() {
       .filter((v) => v.agentTypeId === typeId)
       .sort(
         (a, b) =>
-          b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime()
+          b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime(),
       );
   }
 
@@ -72,9 +85,9 @@ export function AgentTypesPage() {
       </div>
 
       {/* Create type form */}
-      {showCreateType && conn && (
+      {showCreateType && ctx && (
         <CreateAgentTypeForm
-          conn={conn}
+          conn={ctx}
           onCreated={() => setShowCreateType(false)}
         />
       )}
@@ -116,29 +129,25 @@ export function AgentTypesPage() {
                     <button
                       onClick={() =>
                         setShowCreateVersion(
-                          showCreateVersion === at.id ? null : at.id
+                          showCreateVersion === at.id ? null : at.id,
                         )
                       }
                       className="text-xs text-blue-400 hover:text-blue-300"
                     >
-                      {showCreateVersion === at.id
-                        ? "Cancel"
-                        : "+ Add Version"}
+                      {showCreateVersion === at.id ? "Cancel" : "+ Add Version"}
                     </button>
                   </div>
 
-                  {showCreateVersion === at.id && conn && (
+                  {showCreateVersion === at.id && ctx && (
                     <CreateVersionForm
-                      conn={conn}
+                      conn={ctx}
                       agentTypeId={at.id}
                       onCreated={() => setShowCreateVersion(null)}
                     />
                   )}
 
                   {typeVersions.length === 0 ? (
-                    <p className="text-xs text-gray-600">
-                      No versions yet.
-                    </p>
+                    <p className="text-xs text-gray-600">No versions yet.</p>
                   ) : (
                     <div className="space-y-1.5">
                       {typeVersions.map((v) => (
@@ -156,10 +165,10 @@ export function AgentTypesPage() {
                             />
                           </div>
                           <div className="flex items-center gap-2">
-                            {v.status.tag === "Draft" && conn && (
+                            {v.status.tag === "Draft" && ctx && (
                               <button
                                 onClick={() =>
-                                  conn.reducers.activateAgentTypeVersion({
+                                  ctx.reducers.activateAgentTypeVersion({
                                     versionId: v.id,
                                   })
                                 }
@@ -192,7 +201,7 @@ function CreateAgentTypeForm({
   conn,
   onCreated,
 }: {
-  conn: NonNullable<ReturnType<typeof useSpacetime>["conn"]>;
+  conn: NonNullable<ReturnType<typeof useSpacetime>["ctx"]>;
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
@@ -253,7 +262,7 @@ function CreateVersionForm({
   agentTypeId,
   onCreated,
 }: {
-  conn: NonNullable<ReturnType<typeof useSpacetime>["conn"]>;
+  conn: NonNullable<ReturnType<typeof useSpacetime>["ctx"]>;
   agentTypeId: bigint;
   onCreated: () => void;
 }) {

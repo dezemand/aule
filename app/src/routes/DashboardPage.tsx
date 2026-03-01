@@ -1,5 +1,7 @@
-import { useQuery, useSpacetime } from "../hooks/useSpacetime";
+import { useCallback } from "react";
+import { useQuery, useSpacetime, useSubscription } from "../hooks/useSpacetime";
 import { Badge } from "../components/Badge";
+import { tables } from "../module_bindings";
 
 function runtimeStatusColor(tag: string): string {
   switch (tag) {
@@ -36,15 +38,35 @@ function StatCard({
   );
 }
 
+const QUERY = [
+  tables.agent_runtime,
+  tables.agent_task,
+  tables.observation,
+  tables.agent_type,
+];
+
 export function DashboardPage() {
-  const { subscribed } = useSpacetime();
+  const sub = useSubscription(
+    QUERY,
+    useCallback(
+      (db) => [db.agent_runtime, db.agent_task, db.observation, db.agent_type],
+      [],
+    ),
+  );
+  const runtimes = useQuery(sub, (db) => Array.from(db.agent_runtime.iter()));
+  const tasks = useQuery(sub, (db) => Array.from(db.agent_task.iter()));
+  const observations = useQuery(sub, (db) => Array.from(db.observation.iter()));
+  const agentTypes = useQuery(sub, (db) => Array.from(db.agent_type.iter()));
 
-  const runtimes = useQuery((db) => Array.from(db.agent_runtime.iter()));
-  const tasks = useQuery((db) => Array.from(db.agent_task.iter()));
-  const observations = useQuery((db) => Array.from(db.observation.iter()));
-  const agentTypes = useQuery((db) => Array.from(db.agent_type.iter()));
+  if (sub.error) {
+    return (
+      <div className="flex h-full items-center justify-center text-red-400">
+        Subscription error: {sub.error}
+      </div>
+    );
+  }
 
-  if (!subscribed) {
+  if (!sub.subscribed) {
     return (
       <div className="flex h-full items-center justify-center text-gray-500">
         Waiting for SpacetimeDB connection...
@@ -53,18 +75,17 @@ export function DashboardPage() {
   }
 
   const onlineRuntimes = (runtimes ?? []).filter(
-    (r) => r.status.tag !== "Offline"
+    (r) => r.status.tag !== "Offline",
   );
   const activeTasks = (tasks ?? []).filter(
     (t) =>
       t.status.tag !== "Completed" &&
       t.status.tag !== "Failed" &&
-      t.status.tag !== "Cancelled"
+      t.status.tag !== "Cancelled",
   );
   const recentObs = [...(observations ?? [])]
     .sort(
-      (a, b) =>
-        b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime()
+      (a, b) => b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime(),
     )
     .slice(0, 10);
 
@@ -74,10 +95,7 @@ export function DashboardPage() {
 
       {/* Stats row */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard
-          title="Agent Types"
-          value={(agentTypes ?? []).length}
-        />
+        <StatCard title="Agent Types" value={(agentTypes ?? []).length} />
         <StatCard
           title="Runtimes"
           value={onlineRuntimes.length}
@@ -88,10 +106,7 @@ export function DashboardPage() {
           value={activeTasks.length}
           sub={`${(tasks ?? []).length} total`}
         />
-        <StatCard
-          title="Observations"
-          value={(observations ?? []).length}
-        />
+        <StatCard title="Observations" value={(observations ?? []).length} />
       </div>
 
       {/* Runtimes */}

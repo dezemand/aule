@@ -7,7 +7,7 @@ import {
   createRoute,
   Outlet,
 } from "@tanstack/react-router";
-import { SpacetimeProvider } from "./hooks/useSpacetime";
+import { SpacetimeProvider } from "./providers/spacetime";
 import { AppShell } from "./components/AppShell";
 import { DashboardPage } from "./routes/DashboardPage";
 import { TaskDetailsPage } from "./routes/TaskDetailsPage";
@@ -64,5 +64,5 @@ const router = createRouter({ routeTree });
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <RouterProvider router={router} />
-  </StrictMode>
+  </StrictMode>,
 );

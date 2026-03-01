@@ -1,178 +1,130 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  useCallback,
-  type ReactNode,
-} from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
+import type { RowTypedQuery } from "spacetimedb";
 import {
   DbConnection,
-  type EventContext,
   type ErrorContext,
   type SubscriptionEventContext,
 } from "../module_bindings";
-import type { Identity } from "spacetimedb";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface SpacetimeState {
-  conn: DbConnection | null;
-  identity: Identity | null;
-  connected: boolean;
-  subscribed: boolean;
-  error: string | null;
-}
-
-interface SpacetimeContextValue extends SpacetimeState {
-  /** Monotonically increasing counter bumped on every DB event. */
-  version: number;
-}
-
-// ---------------------------------------------------------------------------
-// Context
-// ---------------------------------------------------------------------------
-
-const SpacetimeContext = createContext<SpacetimeContextValue | null>(null);
-
-const SPACETIMEDB_HOST = "ws://localhost:3000";
-const SPACETIMEDB_DB = "aule";
-const TOKEN_KEY = "aule-spacetimedb-token";
-
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
-
-export function SpacetimeProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<SpacetimeState>({
-    conn: null,
-    identity: null,
-    connected: false,
-    subscribed: false,
-    error: null,
-  });
-
-  // Version counter that bumps on every table event so consumers re-render.
-  const [version, setVersion] = useState(0);
-  const bump = useCallback(() => setVersion((v) => v + 1), []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const savedToken = localStorage.getItem(TOKEN_KEY) ?? undefined;
-
-    const conn = DbConnection.builder()
-      .withUri(SPACETIMEDB_HOST)
-      .withDatabaseName(SPACETIMEDB_DB)
-      .withToken(savedToken)
-      .onConnect((ctx: DbConnection, identity: Identity, token: string) => {
-        if (cancelled) return;
-        localStorage.setItem(TOKEN_KEY, token);
-        setState((s) => ({ ...s, conn: ctx, identity, connected: true }));
-
-        // Register bump callbacks on all tables
-        ctx.db.agent_runtime.onInsert(() => bump());
-        ctx.db.agent_runtime.onUpdate(() => bump());
-        ctx.db.agent_runtime.onDelete(() => bump());
-        ctx.db.agent_task.onInsert(() => bump());
-        ctx.db.agent_task.onUpdate(() => bump());
-        ctx.db.agent_task.onDelete(() => bump());
-        ctx.db.agent_type.onInsert(() => bump());
-        ctx.db.agent_type.onUpdate(() => bump());
-        ctx.db.agent_type.onDelete(() => bump());
-        ctx.db.agent_type_version.onInsert(() => bump());
-        ctx.db.agent_type_version.onUpdate(() => bump());
-        ctx.db.agent_type_version.onDelete(() => bump());
-        ctx.db.observation.onInsert(() => bump());
-        ctx.db.observation.onUpdate(() => bump());
-        ctx.db.observation.onDelete(() => bump());
-        ctx.db.runtime_event.onInsert(() => bump());
-        ctx.db.runtime_event.onUpdate(() => bump());
-        ctx.db.runtime_event.onDelete(() => bump());
-        ctx.db.runtime_profile.onInsert(() => bump());
-        ctx.db.runtime_profile.onUpdate(() => bump());
-        ctx.db.runtime_profile.onDelete(() => bump());
-        ctx.db.runtime_platform_info.onInsert(() => bump());
-        ctx.db.runtime_platform_info.onUpdate(() => bump());
-        ctx.db.runtime_platform_info.onDelete(() => bump());
-        ctx.db.runtime_resource_sample.onInsert(() => bump());
-        ctx.db.runtime_resource_sample.onUpdate(() => bump());
-        ctx.db.runtime_resource_sample.onDelete(() => bump());
-
-        // Subscribe to all tables
-        ctx
-          .subscriptionBuilder()
-          .onApplied((_subCtx: SubscriptionEventContext) => {
-            if (cancelled) return;
-            setState((s) => ({ ...s, subscribed: true }));
-            bump();
-          })
-          .onError((_errCtx: ErrorContext) => {
-            if (cancelled) return;
-            setState((s) => ({ ...s, error: "Subscription error" }));
-          })
-          .subscribe([
-            "SELECT * FROM agent_runtime",
-            "SELECT * FROM agent_task",
-            "SELECT * FROM agent_type",
-            "SELECT * FROM agent_type_version",
-            "SELECT * FROM observation",
-            "SELECT * FROM runtime_event",
-            "SELECT * FROM runtime_profile",
-            "SELECT * FROM runtime_platform_info",
-            "SELECT * FROM runtime_resource_sample",
-          ]);
-      })
-      .onConnectError((_ctx: ErrorContext) => {
-        if (cancelled) return;
-        setState((s) => ({
-          ...s,
-          error: "Failed to connect to SpacetimeDB",
-        }));
-      })
-      .onDisconnect(() => {
-        if (cancelled) return;
-        setState((s) => ({
-          ...s,
-          connected: false,
-          subscribed: false,
-        }));
-      })
-      .build();
-
-    setState((s) => ({ ...s, conn }));
-
-    return () => {
-      cancelled = true;
-      conn.disconnect();
-    };
-  }, [bump]);
-
-  return (
-    <SpacetimeContext.Provider value={{ ...state, version }}>
-      {children}
-    </SpacetimeContext.Provider>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
+import {
+  SpacetimeContext,
+  type SpacetimeContextValue,
+} from "../providers/spacetime";
 
 export function useSpacetime(): SpacetimeContextValue {
   const ctx = useContext(SpacetimeContext);
-  if (!ctx) throw new Error("useSpacetime must be used within SpacetimeProvider");
+  if (!ctx)
+    throw new Error("useSpacetime must be used within SpacetimeProvider");
   return ctx;
 }
 
+interface SubscriptionState {
+  version: number;
+  subscribed: boolean;
+  error?: string;
+}
+
+type TableDependency = {
+  onInsert: (listener: () => void) => unknown;
+  removeOnInsert: (listener: () => void) => unknown;
+  onUpdate?: (listener: () => void) => unknown;
+  removeOnUpdate?: (listener: () => void) => unknown;
+  onDelete?: (listener: () => void) => unknown;
+  removeOnDelete?: (listener: () => void) => unknown;
+};
+
 /**
- * Read rows from a SpacetimeDB table. Re-renders when any table changes.
- * The selector receives `conn.db` and should return the data you need.
+ * Subscribes to a specific query and table dependency set.
+ *
+ * `query` and `dependencies` must be stable references (module-level constants,
+ * `useMemo`, or `useCallback`) to avoid re-subscribing on every render.
+ * See callers in `app/src/routes/AgentTypesPage.tsx`,
+ * `app/src/routes/TasksPage.tsx`, and `app/src/routes/TaskDetailsPage.tsx`.
  */
-export function useQuery<T>(selector: (db: DbConnection["db"]) => T): T | undefined {
-  const { conn, subscribed, version } = useSpacetime();
-  if (!conn || !subscribed) return undefined;
-  // version is in the dependency to ensure fresh reads
-  return selector(conn.db);
+export function useSubscription(
+  query: (string | RowTypedQuery<unknown, unknown>)[],
+  dependencies: (db: DbConnection["db"]) => TableDependency[],
+): SubscriptionState {
+  const { ctx } = useSpacetime();
+  const [state, setState] = useState<SubscriptionState>({
+    version: 0,
+    subscribed: false,
+  });
+  const bump = useCallback(
+    () => setState((s) => ({ ...s, version: s.version + 1 })),
+    [],
+  );
+
+  useEffect(() => {
+    if (!ctx) {
+      setState((s) => ({
+        ...s,
+        subscribed: false,
+        error: undefined,
+      }));
+      return;
+    }
+
+    setState((s) => ({
+      ...s,
+      subscribed: false,
+      error: undefined,
+    }));
+
+    let cancelled = false;
+
+    const deps = dependencies(ctx.db);
+    const cleanups: Array<() => void> = [];
+
+    for (const dep of deps) {
+      dep.onInsert(bump);
+      dep.onUpdate?.(bump);
+      dep.onDelete?.(bump);
+
+      cleanups.push(() => dep.removeOnInsert(bump));
+      cleanups.push(() => dep.removeOnUpdate?.(bump));
+      cleanups.push(() => dep.removeOnDelete?.(bump));
+    }
+
+    const subscription = ctx
+      .subscriptionBuilder()
+      .onApplied((_subCtx: SubscriptionEventContext) => {
+        if (cancelled) return;
+        setState((s) => ({ ...s, subscribed: true, error: undefined }));
+      })
+      .onError((_errCtx: ErrorContext) => {
+        if (cancelled) return;
+        setState((s) => ({
+          ...s,
+          error: "Subscription error",
+          subscribed: false,
+        }));
+      })
+      .subscribe(query);
+
+    return () => {
+      cancelled = true;
+
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+
+      if (subscription.isActive()) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [ctx, bump, query, dependencies]);
+
+  return state;
+}
+
+export function useQuery<T>(
+  state: SubscriptionState,
+  selector: (db: DbConnection["db"]) => T,
+): T | undefined {
+  const { ctx } = useSpacetime();
+  const { subscribed } = state;
+  // Re-renders come from parent `bump` incrementing `state.version`; this hook
+  // intentionally only gates access on `ctx` and `subscribed`.
+  if (!ctx || !subscribed) return undefined;
+  return selector(ctx.db);
 }

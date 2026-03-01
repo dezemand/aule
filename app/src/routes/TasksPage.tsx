@@ -1,21 +1,27 @@
-import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { useQuery, useSpacetime } from "../hooks/useSpacetime";
+import { useCallback, useState } from "react";
 import { Badge } from "../components/Badge";
+import { useQuery, useSpacetime, useSubscription } from "../hooks/useSpacetime";
+import { tables } from "../module_bindings";
 import { taskStatusColor } from "../utils/statusColors";
 
 type StatusFilter = "all" | "active" | "completed" | "failed";
 
+const QUERY = [tables.agent_task, tables.agent_type, tables.observation];
+
 export function TasksPage() {
-  const { conn, subscribed } = useSpacetime();
+  const { ctx } = useSpacetime();
+  const sub = useSubscription(
+    QUERY,
+    useCallback((db) => [db.agent_task, db.agent_type, db.observation], []),
+  );
+  const tasks = useQuery(sub, (db) => Array.from(db.agent_task.iter()));
+  const agentTypes = useQuery(sub, (db) => Array.from(db.agent_type.iter()));
+  const observations = useQuery(sub, (db) => Array.from(db.observation.iter()));
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [showCreate, setShowCreate] = useState(false);
 
-  const tasks = useQuery((db) => Array.from(db.agent_task.iter()));
-  const agentTypes = useQuery((db) => Array.from(db.agent_type.iter()));
-  const observations = useQuery((db) => Array.from(db.observation.iter()));
-
-  if (!subscribed) {
+  if (!sub.subscribed) {
     return (
       <div className="flex h-full items-center justify-center text-gray-500">
         Waiting for SpacetimeDB connection...
@@ -39,12 +45,11 @@ export function TasksPage() {
   });
 
   const sorted = [...filtered].sort(
-    (a, b) =>
-      b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime()
+    (a, b) => b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime(),
   );
 
   const agentTypeMap = new Map(
-    (agentTypes ?? []).map((at) => [Number(at.id), at.name])
+    (agentTypes ?? []).map((at) => [Number(at.id), at.name]),
   );
 
   function getTaskObservations(taskId: bigint) {
@@ -52,7 +57,7 @@ export function TasksPage() {
       .filter((o) => o.taskId === taskId)
       .sort(
         (a, b) =>
-          a.createdAt.toDate().getTime() - b.createdAt.toDate().getTime()
+          a.createdAt.toDate().getTime() - b.createdAt.toDate().getTime(),
       );
   }
 
@@ -69,9 +74,9 @@ export function TasksPage() {
       </div>
 
       {/* Create form */}
-      {showCreate && conn && (
+      {showCreate && ctx && (
         <CreateTaskForm
-          conn={conn}
+          conn={ctx}
           agentTypes={agentTypes ?? []}
           onCreated={() => setShowCreate(false)}
         />
@@ -92,7 +97,7 @@ export function TasksPage() {
             >
               {f}
             </button>
-          )
+          ),
         )}
       </div>
 
@@ -121,22 +126,15 @@ export function TasksPage() {
                       {t.description}
                     </p>
                   </div>
-                  <span className="text-xs text-gray-600">
-                    #{Number(t.id)}
-                  </span>
+                  <span className="text-xs text-gray-600">#{Number(t.id)}</span>
                 </div>
                 <div className="mt-2 flex gap-4 text-xs text-gray-500">
                   <span>
-                    Type:{" "}
-                    {agentTypeMap.get(Number(t.agentTypeId)) ?? "Unknown"}
+                    Type: {agentTypeMap.get(Number(t.agentTypeId)) ?? "Unknown"}
                   </span>
-                  <span>
-                    Created: {t.createdAt.toDate().toLocaleString()}
-                  </span>
+                  <span>Created: {t.createdAt.toDate().toLocaleString()}</span>
                   {t.result && (
-                    <span className="text-green-400">
-                      Result: {t.result}
-                    </span>
+                    <span className="text-green-400">Result: {t.result}</span>
                   )}
                 </div>
 
@@ -195,7 +193,7 @@ function CreateTaskForm({
   agentTypes,
   onCreated,
 }: {
-  conn: NonNullable<ReturnType<typeof useSpacetime>["conn"]>;
+  conn: NonNullable<ReturnType<typeof useSpacetime>["ctx"]>;
   agentTypes: Array<{ id: bigint; name: string }>;
   onCreated: () => void;
 }) {

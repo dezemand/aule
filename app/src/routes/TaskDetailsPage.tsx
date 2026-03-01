@@ -1,7 +1,8 @@
 import { Link, useParams } from "@tanstack/react-router";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Badge } from "../components/Badge";
-import { useQuery, useSpacetime } from "../hooks/useSpacetime";
+import { useQuery, useSubscription } from "../hooks/useSpacetime";
+import { tables } from "../module_bindings";
 import { taskStatusColor } from "../utils/statusColors";
 
 function runtimeEventColor(tag: string): string {
@@ -19,17 +20,32 @@ function runtimeEventColor(tag: string): string {
   }
 }
 
+const QUERY = [
+  tables.agent_task,
+  tables.agent_type,
+  tables.observation,
+  tables.runtime_event,
+];
+
 export function TaskDetailsPage() {
-  const { subscribed } = useSpacetime();
   const { taskId } = useParams({ from: "/tasks/$taskId" });
   const [logsOpen, setLogsOpen] = useState(true);
 
-  const tasks = useQuery((db) => Array.from(db.agent_task.iter()));
-  const agentTypes = useQuery((db) => Array.from(db.agent_type.iter()));
-  const observations = useQuery((db) => Array.from(db.observation.iter()));
-  const runtimeEvents = useQuery((db) => Array.from(db.runtime_event.iter()));
+  const sub = useSubscription(
+    QUERY,
+    useCallback(
+      (db) => [db.agent_task, db.agent_type, db.observation, db.runtime_event],
+      [],
+    ),
+  );
+  const tasks = useQuery(sub, (db) => Array.from(db.agent_task.iter()));
+  const agentTypes = useQuery(sub, (db) => Array.from(db.agent_type.iter()));
+  const observations = useQuery(sub, (db) => Array.from(db.observation.iter()));
+  const runtimeEvents = useQuery(sub, (db) =>
+    Array.from(db.runtime_event.iter()),
+  );
 
-  if (!subscribed) {
+  if (!sub.subscribed) {
     return (
       <div className="flex h-full items-center justify-center text-gray-500">
         Waiting for SpacetimeDB connection...
@@ -53,7 +69,7 @@ export function TaskDetailsPage() {
 
   const task = (tasks ?? []).find((t) => t.id === parsedTaskId);
   const agentTypeMap = new Map(
-    (agentTypes ?? []).map((at) => [Number(at.id), at.name])
+    (agentTypes ?? []).map((at) => [Number(at.id), at.name]),
   );
 
   if (!task) {
@@ -69,11 +85,15 @@ export function TaskDetailsPage() {
 
   const taskObservations = (observations ?? [])
     .filter((o) => o.taskId === task.id)
-    .sort((a, b) => a.createdAt.toDate().getTime() - b.createdAt.toDate().getTime());
+    .sort(
+      (a, b) => a.createdAt.toDate().getTime() - b.createdAt.toDate().getTime(),
+    );
 
   const taskRuntimeEvents = (runtimeEvents ?? [])
     .filter((e) => e.taskId === task.id)
-    .sort((a, b) => a.createdAt.toDate().getTime() - b.createdAt.toDate().getTime());
+    .sort(
+      (a, b) => a.createdAt.toDate().getTime() - b.createdAt.toDate().getTime(),
+    );
 
   return (
     <div className="space-y-6">
@@ -86,8 +106,13 @@ export function TaskDetailsPage() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-semibold text-gray-100">{task.title}</h1>
-                <Badge label={task.status.tag} color={taskStatusColor(task.status.tag)} />
+                <h1 className="text-xl font-semibold text-gray-100">
+                  {task.title}
+                </h1>
+                <Badge
+                  label={task.status.tag}
+                  color={taskStatusColor(task.status.tag)}
+                />
               </div>
               <p className="mt-2 text-sm text-gray-400">{task.description}</p>
             </div>
@@ -96,14 +121,19 @@ export function TaskDetailsPage() {
 
           <div className="mt-4 grid gap-2 text-xs text-gray-500 sm:grid-cols-2">
             <div>
-              Agent type: {agentTypeMap.get(Number(task.agentTypeId)) ?? "Unknown"}
+              Agent type:{" "}
+              {agentTypeMap.get(Number(task.agentTypeId)) ?? "Unknown"}
             </div>
             <div>Created: {task.createdAt.toDate().toLocaleString()}</div>
             <div>
-              Started: {task.startedAt ? task.startedAt.toDate().toLocaleString() : "-"}
+              Started:{" "}
+              {task.startedAt ? task.startedAt.toDate().toLocaleString() : "-"}
             </div>
             <div>
-              Completed: {task.completedAt ? task.completedAt.toDate().toLocaleString() : "-"}
+              Completed:{" "}
+              {task.completedAt
+                ? task.completedAt.toDate().toLocaleString()
+                : "-"}
             </div>
           </div>
 
@@ -112,7 +142,9 @@ export function TaskDetailsPage() {
               <p className="text-xs font-medium uppercase tracking-wider text-gray-500">
                 Result
               </p>
-              <p className="mt-1 text-sm text-gray-300 whitespace-pre-wrap">{task.result}</p>
+              <p className="mt-1 text-sm text-gray-300 whitespace-pre-wrap">
+                {task.result}
+              </p>
             </div>
           )}
         </div>
@@ -145,7 +177,9 @@ export function TaskDetailsPage() {
                   />
                   <span>{o.createdAt.toDate().toLocaleString()}</span>
                 </div>
-                <p className="mt-1 text-sm text-gray-300 whitespace-pre-wrap">{o.content}</p>
+                <p className="mt-1 text-sm text-gray-300 whitespace-pre-wrap">
+                  {o.content}
+                </p>
               </div>
             ))}
           </div>
