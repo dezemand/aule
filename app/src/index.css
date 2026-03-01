@@ -1,5 +1,50 @@
 @import "tailwindcss";
+@source "../node_modules/streamdown/dist/*.js";
 
 body {
   @apply bg-gray-950 text-gray-100 antialiased;
+}
+
+.markdown {
+  @apply text-gray-200;
+}
+
+.markdown :where(h1, h2, h3, h4) {
+  @apply mt-4 font-semibold text-gray-100;
+}
+
+.markdown :where(p, ul, ol, blockquote, pre, table) {
+  @apply mt-2;
+}
+
+.markdown :where(ul, ol) {
+  @apply ml-5;
+}
+
+.markdown :where(ul) {
+  @apply list-disc;
+}
+
+.markdown :where(ol) {
+  @apply list-decimal;
+}
+
+.markdown :where(a) {
+  @apply text-blue-300 underline decoration-blue-500/50 underline-offset-2;
+}
+
+.markdown :where(code) {
+  @apply rounded bg-gray-800/80 px-1 py-0.5 text-[0.85em] text-gray-100;
+}
+
+.markdown :where(pre) {
+  @apply overflow-x-auto rounded-md border border-gray-800 bg-gray-950/80 p-3;
+}
+
+.markdown :where(pre code) {
+  @apply bg-transparent p-0;
+}
+
+.markdown :where(blockquote) {
+  @apply border-l-2 border-gray-700 pl-3 text-gray-300;
 }
