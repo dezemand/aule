@@ -358,11 +358,9 @@ fn run_reasoning_loop(
 }
 
 fn post_observation(ctx: &DbConnection, task_id: u64, kind: ObservationKind, content: String) {
-    if let Err(err) = ctx
-        .reducers
-        .post_observation(task_id, kind, content.clone())
-    {
-        warn!("post_observation failed for task {task_id}: {err}. content={content}");
+    let content_len = content.len();
+    if let Err(err) = ctx.reducers.post_observation(task_id, kind, content) {
+        warn!("post_observation failed for task {task_id}: {err} (content_len={content_len})");
     }
 }
 

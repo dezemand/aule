@@ -291,8 +291,12 @@ impl OpenAiClient {
             });
         }
 
-        // Parse the completed tool call before signaling Done, so Done is
-        // only emitted when the tool call is valid.
+        // Verify the stream completed normally (received `data: [DONE]`)
+        // before attempting to parse the tool call.
+        if !done {
+            bail!("OpenAI SSE stream ended without a [DONE] marker (connection may have dropped)");
+        }
+
         if tool_call_id.is_empty() || tool_name.is_empty() {
             bail!("OpenAI stream completed without a tool call");
         }
