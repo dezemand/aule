@@ -927,12 +927,26 @@ fn execute_non_terminal_tool_calls(
     turn: u32,
     executable_calls: Vec<IndexedToolCall>,
 ) -> Vec<(usize, String, String)> {
+    enum NonTerminalJobResult {
+        Shell {
+            index: usize,
+            tool_call_id: String,
+            command: String,
+            run_result: Result<shell::ShellResult>,
+        },
+        Tool {
+            index: usize,
+            tool_call_id: String,
+            tool_result: String,
+        },
+    }
+
     let mut tool_results = Vec::new();
     let shell_timeout = config.shell_timeout;
     let shell_output_limit_bytes = config.shell_output_limit_bytes;
 
     thread::scope(|scope| {
-        let mut shell_jobs = Vec::new();
+        let mut jobs = Vec::new();
 
         for call in executable_calls {
             let IndexedToolCall {
@@ -943,79 +957,107 @@ fn execute_non_terminal_tool_calls(
 
             match action {
                 AgentAction::Shell { command } => {
-                    info!("task #{} turn {} sh[{}]: {}", task_id, turn, index, command);
-
-                    post_observation(
-                        ctx,
-                        task_id,
-                        ObservationKind::Progress,
-                        format!("Running command: `{command}`"),
-                    );
-
-                    let command_for_thread = command.clone();
                     let handle = scope.spawn(move || {
-                        let run_result = shell::run_shell(
-                            &command_for_thread,
-                            shell_timeout,
-                            shell_output_limit_bytes,
+                        info!("task #{} turn {} sh[{}]: {}", task_id, turn, index, command);
+                        post_observation(
+                            ctx,
+                            task_id,
+                            ObservationKind::Progress,
+                            format!("Running command: `{command}`"),
                         );
-                        (command_for_thread, run_result)
+
+                        let run_result =
+                            shell::run_shell(&command, shell_timeout, shell_output_limit_bytes);
+
+                        NonTerminalJobResult::Shell {
+                            index,
+                            tool_call_id,
+                            command,
+                            run_result,
+                        }
                     });
 
-                    shell_jobs.push((index, tool_call_id, command, handle));
+                    jobs.push(handle);
                 }
                 AgentAction::Observe { kind, content } => {
-                    let obs_kind = observe_kind_to_observation_kind(&kind);
-                    post_observation(ctx, task_id, obs_kind, content);
-                    let tool_result = format!("observation posted ({})", kind.as_str());
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ToolResult,
-                        format!("tool_call_id={tool_call_id}\nresult={tool_result}"),
-                    );
-                    tool_results.push((index, tool_call_id, tool_result));
+                    let handle = scope.spawn(move || {
+                        let obs_kind = observe_kind_to_observation_kind(&kind);
+                        post_observation(ctx, task_id, obs_kind, content);
+                        let tool_result = format!("observation posted ({})", kind.as_str());
+                        create_runtime_event(
+                            ctx,
+                            next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                            task_id,
+                            turn,
+                            RuntimeEventType::ToolResult,
+                            format!("tool_call_id={tool_call_id}\nresult={tool_result}"),
+                        );
+
+                        NonTerminalJobResult::Tool {
+                            index,
+                            tool_call_id,
+                            tool_result,
+                        }
+                    });
+
+                    jobs.push(handle);
                 }
                 AgentAction::Status { content } => {
-                    post_observation(
-                        ctx,
-                        task_id,
-                        ObservationKind::Progress,
-                        format!("status: {content}"),
-                    );
-                    let tool_result = "status recorded".to_string();
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ToolResult,
-                        format!("tool_call_id={tool_call_id}\nresult={tool_result}"),
-                    );
-                    tool_results.push((index, tool_call_id, tool_result));
+                    let handle = scope.spawn(move || {
+                        post_observation(
+                            ctx,
+                            task_id,
+                            ObservationKind::Progress,
+                            format!("status: {content}"),
+                        );
+                        let tool_result = "status recorded".to_string();
+                        create_runtime_event(
+                            ctx,
+                            next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                            task_id,
+                            turn,
+                            RuntimeEventType::ToolResult,
+                            format!("tool_call_id={tool_call_id}\nresult={tool_result}"),
+                        );
+
+                        NonTerminalJobResult::Tool {
+                            index,
+                            tool_call_id,
+                            tool_result,
+                        }
+                    });
+
+                    jobs.push(handle);
                 }
                 AgentAction::Invalid { error } => {
-                    warn!(
-                        "task #{} turn {} invalid tool call[{}]: {}",
-                        task_id, turn, index, error
-                    );
-                    post_observation(
-                        ctx,
-                        task_id,
-                        ObservationKind::Error,
-                        format!("Model produced an invalid tool call: {error}"),
-                    );
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ToolResult,
-                        format!("tool_call_id={tool_call_id}\nresult={error}"),
-                    );
-                    tool_results.push((index, tool_call_id, error));
+                    let handle = scope.spawn(move || {
+                        warn!(
+                            "task #{} turn {} invalid tool call[{}]: {}",
+                            task_id, turn, index, error
+                        );
+                        post_observation(
+                            ctx,
+                            task_id,
+                            ObservationKind::Error,
+                            format!("Model produced an invalid tool call: {error}"),
+                        );
+                        create_runtime_event(
+                            ctx,
+                            next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                            task_id,
+                            turn,
+                            RuntimeEventType::ToolResult,
+                            format!("tool_call_id={tool_call_id}\nresult={error}"),
+                        );
+
+                        NonTerminalJobResult::Tool {
+                            index,
+                            tool_call_id,
+                            tool_result: error,
+                        }
+                    });
+
+                    jobs.push(handle);
                 }
                 AgentAction::Finish { .. } | AgentAction::Fail { .. } => {
                     warn!(
@@ -1026,125 +1068,127 @@ fn execute_non_terminal_tool_calls(
             }
         }
 
-        for (index, tool_call_id, command, handle) in shell_jobs {
-            let (returned_command, shell_result) = match handle.join() {
+        for handle in jobs {
+            let job_result = match handle.join() {
                 Ok(v) => v,
                 Err(_) => {
-                    let panic_result = "shell execution panicked".to_string();
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-shell-output")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ShellOutput,
-                        format!("command: {command}\n\nerror: {panic_result}"),
+                    warn!(
+                        "non-terminal job panicked for task {} turn {}",
+                        task_id, turn
                     );
-                    post_observation(
-                        ctx,
-                        task_id,
-                        ObservationKind::Error,
-                        format!("Command execution panicked: `{command}`"),
-                    );
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ToolResult,
-                        format!("tool_call_id={tool_call_id}\nresult={panic_result}"),
-                    );
-                    tool_results.push((index, tool_call_id, panic_result));
                     continue;
                 }
             };
 
-            match shell_result {
-                Ok(result) => {
-                    let outcome = format!(
-                        "exit_code={:?} timed_out={} duration_ms={}\nstdout:\n{}\nstderr:\n{}",
-                        result.exit_code,
-                        result.timed_out,
-                        result.duration_ms,
-                        result.stdout,
-                        result.stderr,
-                    );
-
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-shell-output")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ShellOutput,
-                        format!("command: {returned_command}\n\n{outcome}"),
-                    );
-
-                    let (kind, summary) = if result.timed_out {
-                        (
-                            ObservationKind::Error,
-                            format!(
-                                "Command timed out after {}ms: `{returned_command}`",
-                                result.duration_ms
-                            ),
-                        )
-                    } else if result.exit_code.unwrap_or(1) != 0 {
-                        (
-                            ObservationKind::Error,
-                            format!(
-                                "Command failed (exit_code={:?}, {}ms): `{returned_command}`",
-                                result.exit_code, result.duration_ms
-                            ),
-                        )
-                    } else {
-                        (
-                            ObservationKind::Finding,
-                            format!(
-                                "Command succeeded in {}ms: `{returned_command}`",
-                                result.duration_ms
-                            ),
-                        )
-                    };
-                    post_observation(ctx, task_id, kind, summary);
-
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ToolResult,
-                        format!(
-                            "tool_call_id={tool_call_id}\nresult=exit_code={:?} timed_out={} duration_ms={}",
-                            result.exit_code, result.timed_out, result.duration_ms
-                        ),
-                    );
-
-                    tool_results.push((index, tool_call_id, outcome));
+            match job_result {
+                NonTerminalJobResult::Tool {
+                    index,
+                    tool_call_id,
+                    tool_result,
+                } => {
+                    tool_results.push((index, tool_call_id, tool_result));
                 }
-                Err(err) => {
-                    let err_text = format!("shell execution error: {err:#}");
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-shell-output")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ShellOutput,
-                        format!("command: {returned_command}\n\nerror: {err_text}"),
-                    );
-                    post_observation(
-                        ctx,
-                        task_id,
-                        ObservationKind::Error,
-                        format!("Failed to run command `{returned_command}`: {err:#}"),
-                    );
-                    create_runtime_event(
-                        ctx,
-                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
-                        task_id,
-                        turn,
-                        RuntimeEventType::ToolResult,
-                        format!("tool_call_id={tool_call_id}\nresult={err_text}"),
-                    );
-                    tool_results.push((index, tool_call_id, err_text));
-                }
+                NonTerminalJobResult::Shell {
+                    index,
+                    tool_call_id,
+                    command,
+                    run_result,
+                } => match run_result {
+                    Ok(result) => {
+                        let outcome = format!(
+                            "exit_code={:?} timed_out={} duration_ms={}\nstdout:\n{}\nstderr:\n{}",
+                            result.exit_code,
+                            result.timed_out,
+                            result.duration_ms,
+                            result.stdout,
+                            result.stderr,
+                        );
+
+                        create_runtime_event(
+                            ctx,
+                            next_runtime_event_id(
+                                task_id,
+                                turn,
+                                &format!("tool-{index}-shell-output"),
+                            ),
+                            task_id,
+                            turn,
+                            RuntimeEventType::ShellOutput,
+                            format!("command: {command}\n\n{outcome}"),
+                        );
+
+                        let (kind, summary) = if result.timed_out {
+                            (
+                                ObservationKind::Error,
+                                format!(
+                                    "Command timed out after {}ms: `{command}`",
+                                    result.duration_ms
+                                ),
+                            )
+                        } else if result.exit_code.unwrap_or(1) != 0 {
+                            (
+                                ObservationKind::Error,
+                                format!(
+                                    "Command failed (exit_code={:?}, {}ms): `{command}`",
+                                    result.exit_code, result.duration_ms
+                                ),
+                            )
+                        } else {
+                            (
+                                ObservationKind::Finding,
+                                format!(
+                                    "Command succeeded in {}ms: `{command}`",
+                                    result.duration_ms
+                                ),
+                            )
+                        };
+                        post_observation(ctx, task_id, kind, summary);
+
+                        create_runtime_event(
+                            ctx,
+                            next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                            task_id,
+                            turn,
+                            RuntimeEventType::ToolResult,
+                            format!(
+                                "tool_call_id={tool_call_id}\nresult=exit_code={:?} timed_out={} duration_ms={}",
+                                result.exit_code, result.timed_out, result.duration_ms
+                            ),
+                        );
+
+                        tool_results.push((index, tool_call_id, outcome));
+                    }
+                    Err(err) => {
+                        let err_text = format!("shell execution error: {err:#}");
+                        create_runtime_event(
+                            ctx,
+                            next_runtime_event_id(
+                                task_id,
+                                turn,
+                                &format!("tool-{index}-shell-output"),
+                            ),
+                            task_id,
+                            turn,
+                            RuntimeEventType::ShellOutput,
+                            format!("command: {command}\n\nerror: {err_text}"),
+                        );
+                        post_observation(
+                            ctx,
+                            task_id,
+                            ObservationKind::Error,
+                            format!("Failed to run command `{command}`: {err:#}"),
+                        );
+                        create_runtime_event(
+                            ctx,
+                            next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                            task_id,
+                            turn,
+                            RuntimeEventType::ToolResult,
+                            format!("tool_call_id={tool_call_id}\nresult={err_text}"),
+                        );
+                        tool_results.push((index, tool_call_id, err_text));
+                    }
+                },
             }
         }
     });

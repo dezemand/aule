@@ -276,8 +276,8 @@ impl OpenAiClient {
 
         // Buffered flush state
         let mut pending_text = String::new();
-        let mut pending_args = String::new();
-        let mut active_tool_name = String::new();
+        let mut pending_args_by_index: Vec<String> = Vec::new();
+        let mut active_tool_name_by_index: Vec<String> = Vec::new();
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_millis(250);
 
@@ -341,6 +341,8 @@ impl OpenAiClient {
 
                     if idx == tool_calls.len() {
                         tool_calls.push((String::new(), String::new(), String::new()));
+                        pending_args_by_index.push(String::new());
+                        active_tool_name_by_index.push(String::new());
                     }
 
                     let entry = &mut tool_calls[idx];
@@ -351,11 +353,11 @@ impl OpenAiClient {
                     if let Some(ref func) = tc_delta.function {
                         if let Some(ref name) = func.name {
                             entry.1 = name.clone();
-                            active_tool_name = name.clone();
+                            active_tool_name_by_index[idx] = name.clone();
                         }
                         if let Some(ref args) = func.arguments {
                             entry.2.push_str(args);
-                            pending_args.push_str(args);
+                            pending_args_by_index[idx].push_str(args);
                         }
                     }
                 }
@@ -366,11 +368,13 @@ impl OpenAiClient {
                 if !pending_text.is_empty() {
                     on_event(StreamEvent::TextDelta(std::mem::take(&mut pending_text)));
                 }
-                if !pending_args.is_empty() {
-                    on_event(StreamEvent::ToolArgsDelta {
-                        tool_name: active_tool_name.clone(),
-                        args_delta: std::mem::take(&mut pending_args),
-                    });
+                for idx in 0..pending_args_by_index.len() {
+                    if !pending_args_by_index[idx].is_empty() {
+                        on_event(StreamEvent::ToolArgsDelta {
+                            tool_name: active_tool_name_by_index[idx].clone(),
+                            args_delta: std::mem::take(&mut pending_args_by_index[idx]),
+                        });
+                    }
                 }
                 last_flush = Instant::now();
             }
@@ -409,11 +413,13 @@ impl OpenAiClient {
         if !pending_text.is_empty() {
             on_event(StreamEvent::TextDelta(pending_text));
         }
-        if !pending_args.is_empty() {
-            on_event(StreamEvent::ToolArgsDelta {
-                tool_name: active_tool_name,
-                args_delta: pending_args,
-            });
+        for idx in 0..pending_args_by_index.len() {
+            if !pending_args_by_index[idx].is_empty() {
+                on_event(StreamEvent::ToolArgsDelta {
+                    tool_name: active_tool_name_by_index[idx].clone(),
+                    args_delta: std::mem::take(&mut pending_args_by_index[idx]),
+                });
+            }
         }
 
         // Verify the stream completed normally (received `data: [DONE]`)
