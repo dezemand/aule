@@ -93,7 +93,13 @@ The WASM module links against SpacetimeDB host functions (`bytes_sink_write`, `d
 spacetime build -p packages/aule-spacetimedb
 ```
 
-The workspace `Cargo.toml` should exclude WASM module crates:
+Or via the task runner:
+
+```sh
+just build-module
+```
+
+The workspace `Cargo.toml` excludes the WASM module crate:
 
 ```toml
 [workspace]
@@ -208,7 +214,7 @@ The Bun client serves as a working proof-of-concept and reference implementation
 - No filesystem access (`std::fs` will panic at runtime)
 - No network access (`std::net` will panic at runtime)
 - No threads (`std::thread` will panic at runtime)
-- The `log` crate works -- SpacetimeDB installs a logger automatically
+- The `log` crate works — SpacetimeDB installs a logger automatically
 - `rand` works if enabled via SpacetimeDB's feature flags (deterministic seeding per reducer call)
 - Any Rust crate that compiles to `wasm32-unknown-unknown` can be used
 
@@ -217,27 +223,30 @@ The Bun client serves as a working proof-of-concept and reference implementation
 ### Starting a local instance
 
 ```sh
-spacetime start
+just db
 ```
 
-This runs SpacetimeDB locally on port 3000.
+This starts SpacetimeDB locally via Docker Compose on port 3000.
 
 ### Publishing a module
 
 ```sh
-spacetime build -p packages/aule-spacetimedb
-spacetime publish --server local -p packages/aule-spacetimedb aule
+just publish
+```
+
+To publish with a clean database:
+
+```sh
+just publish -- --delete-data
 ```
 
 ### Generating client bindings
 
 ```sh
-# Rust
-spacetime generate --lang rust --out-dir packages/aule-spacetimedb-client/src/module_bindings -p packages/aule-spacetimedb
-
-# TypeScript
-spacetime generate --lang typescript --out-dir app/src/module_bindings -p packages/aule-spacetimedb
+just generate
 ```
+
+This regenerates both Rust (`packages/aule-spacetimedb-client/src/module_bindings`) and TypeScript (`app/src/module_bindings`) bindings.
 
 ### Running clients
 
@@ -245,20 +254,19 @@ spacetime generate --lang typescript --out-dir app/src/module_bindings -p packag
 # Rust client
 cargo run -p aule-client
 
-# Bun client
-cd app && bun index.ts
+# Frontend dev server
+cd app && bun run dev
 ```
 
 ### Querying the database
 
 ```sh
-spacetime sql --server local aule "SELECT * FROM agent_runtime"
-spacetime sql --server local aule "SELECT * FROM agent_task"
-spacetime sql --server local aule "SELECT * FROM agent_type"
+spacetime sql --server http://localhost:3000 aule "SELECT * FROM agent_runtime"
+spacetime sql --server http://localhost:3000 aule "SELECT * FROM agent_type"
 ```
 
 ### Viewing logs
 
 ```sh
-spacetime logs --server local aule
+spacetime logs --server http://localhost:3000 aule
 ```
