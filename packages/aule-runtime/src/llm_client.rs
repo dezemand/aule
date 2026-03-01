@@ -273,6 +273,7 @@ impl OpenAiClient {
         // from the model don't get their arguments concatenated together.
         let mut content_buf = String::new();
         let mut tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args)
+        let mut seen_tool_call_by_index: Vec<bool> = Vec::new();
 
         // Buffered flush state
         let mut pending_text = String::new();
@@ -331,21 +332,15 @@ impl OpenAiClient {
                         )));
                     }
 
-                    if idx > tool_calls.len() {
-                        return Err(LlmStreamError::fatal(anyhow!(
-                            "OpenAI stream returned out-of-order tool call index {} (current_len={})",
-                            idx,
-                            tool_calls.len()
-                        )));
-                    }
-
-                    if idx == tool_calls.len() {
+                    while tool_calls.len() <= idx {
                         tool_calls.push((String::new(), String::new(), String::new()));
+                        seen_tool_call_by_index.push(false);
                         pending_args_by_index.push(String::new());
                         active_tool_name_by_index.push(String::new());
                     }
 
                     let entry = &mut tool_calls[idx];
+                    seen_tool_call_by_index[idx] = true;
 
                     if let Some(ref id) = tc_delta.id {
                         entry.0 = id.clone();
@@ -430,18 +425,37 @@ impl OpenAiClient {
             )));
         }
 
-        if tool_calls.is_empty() {
+        let seen_tool_calls = collect_seen_tool_calls(tool_calls, &seen_tool_call_by_index);
+
+        if seen_tool_calls.is_empty() {
             return Err(LlmStreamError::fatal(anyhow!(
                 "OpenAI stream completed without a tool call"
             )));
         }
 
-        let decision_set =
-            build_tool_decision_set(&content_buf, &tool_calls).map_err(LlmStreamError::fatal)?;
+        let decision_set = build_tool_decision_set(&content_buf, &seen_tool_calls)
+            .map_err(LlmStreamError::fatal)?;
         on_event(StreamEvent::Done);
 
         Ok(decision_set)
     }
+}
+
+fn collect_seen_tool_calls(
+    tool_calls: Vec<(String, String, String)>,
+    seen_tool_call_by_index: &[bool],
+) -> Vec<(String, String, String)> {
+    tool_calls
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, tc)| {
+            seen_tool_call_by_index
+                .get(idx)
+                .copied()
+                .unwrap_or(false)
+                .then_some(tc)
+        })
+        .collect()
 }
 
 fn is_retryable_http_status(status: StatusCode) -> bool {
@@ -748,7 +762,7 @@ mod tests {
 
     use super::{
         AgentAction, Conversation, ObserveKind, action_from_tool_call, build_tool_decision_set,
-        compute_retry_delay_ms, is_retryable_http_status,
+        collect_seen_tool_calls, compute_retry_delay_ms, is_retryable_http_status,
     };
 
     #[test]
@@ -869,6 +883,59 @@ mod tests {
 
         let err = build_tool_decision_set("", &tool_calls).unwrap_err();
         assert!(err.to_string().contains("incomplete tool call at index 0"));
+    }
+
+    #[test]
+    fn collect_seen_tool_calls_skips_unseen_gaps() {
+        let tool_calls = vec![
+            (
+                "call_1".to_string(),
+                "aule_status".to_string(),
+                r#"{"content":"one"}"#.to_string(),
+            ),
+            (String::new(), String::new(), String::new()),
+            (
+                "call_3".to_string(),
+                "aule_status".to_string(),
+                r#"{"content":"three"}"#.to_string(),
+            ),
+        ];
+        let seen = vec![true, false, true];
+
+        let filtered = collect_seen_tool_calls(tool_calls, &seen);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].0, "call_1");
+        assert_eq!(filtered[1].0, "call_3");
+    }
+
+    #[test]
+    fn sparse_seen_tool_calls_build_decision_successfully() {
+        let tool_calls = vec![
+            (
+                "call_1".to_string(),
+                "aule_status".to_string(),
+                r#"{"content":"one"}"#.to_string(),
+            ),
+            (String::new(), String::new(), String::new()),
+            (
+                "call_3".to_string(),
+                "aule_observe".to_string(),
+                r#"{"kind":"finding","content":"three"}"#.to_string(),
+            ),
+        ];
+        let seen = vec![true, false, true];
+
+        let filtered = collect_seen_tool_calls(tool_calls, &seen);
+        let decision = build_tool_decision_set("ok", &filtered).unwrap();
+
+        assert_eq!(decision.tool_calls.len(), 2);
+        assert_eq!(
+            decision.assistant_message["tool_calls"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
