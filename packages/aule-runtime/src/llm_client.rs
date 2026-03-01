@@ -348,53 +348,62 @@ impl OpenAiClient {
             bail!("OpenAI stream completed without a tool call");
         }
 
-        let parsed_tool_calls: Vec<ToolCall> = tool_calls
-            .iter()
-            .enumerate()
-            .map(|(idx, (id, name, args))| {
-                if id.trim().is_empty() || name.trim().is_empty() {
-                    bail!(
-                        "OpenAI stream completed with an incomplete tool call at index {}",
-                        idx
-                    );
-                }
-                let action = action_from_tool_call(name, args)
-                    .with_context(|| format!("Failed to parse tool call at index {idx}"))?;
-                Ok(ToolCall {
-                    tool_call_id: id.clone(),
-                    action,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let decision_set = build_tool_decision_set(&content_buf, &tool_calls)?;
         on_event(StreamEvent::Done);
 
-        // Build the assistant message including ALL tool calls for correct
-        // conversation state (OpenAI expects a tool result for each).
-        let tool_calls_json: Vec<Value> = tool_calls
-            .iter()
-            .map(|(id, name, args)| {
-                json!({
-                    "id": id,
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "arguments": args,
-                    }
-                })
-            })
-            .collect();
-
-        let assistant_message = json!({
-            "role": "assistant",
-            "content": if content_buf.is_empty() { Value::Null } else { Value::String(content_buf) },
-            "tool_calls": tool_calls_json,
-        });
-
-        Ok(ToolDecisionSet {
-            assistant_message,
-            tool_calls: parsed_tool_calls,
-        })
+        Ok(decision_set)
     }
+}
+
+fn build_tool_decision_set(
+    content_buf: &str,
+    tool_calls: &[(String, String, String)],
+) -> Result<ToolDecisionSet> {
+    let parsed_tool_calls: Vec<ToolCall> = tool_calls
+        .iter()
+        .enumerate()
+        .map(|(idx, (id, name, args))| {
+            if id.trim().is_empty() || name.trim().is_empty() {
+                bail!(
+                    "OpenAI stream completed with an incomplete tool call at index {}",
+                    idx
+                );
+            }
+            let action = action_from_tool_call(name, args)
+                .with_context(|| format!("Failed to parse tool call at index {idx}"))?;
+            Ok(ToolCall {
+                tool_call_id: id.clone(),
+                action,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Build the assistant message including ALL tool calls for correct
+    // conversation state (OpenAI expects a tool result for each).
+    let tool_calls_json: Vec<Value> = tool_calls
+        .iter()
+        .map(|(id, name, args)| {
+            json!({
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": args,
+                }
+            })
+        })
+        .collect();
+
+    let assistant_message = json!({
+        "role": "assistant",
+        "content": if content_buf.is_empty() { Value::Null } else { Value::String(content_buf.to_string()) },
+        "tool_calls": tool_calls_json,
+    });
+
+    Ok(ToolDecisionSet {
+        assistant_message,
+        tool_calls: parsed_tool_calls,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +628,9 @@ struct FailArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentAction, Conversation, ObserveKind, action_from_tool_call};
+    use super::{
+        AgentAction, Conversation, ObserveKind, action_from_tool_call, build_tool_decision_set,
+    };
 
     #[test]
     fn parses_sh_tool_call() {
@@ -687,5 +698,57 @@ mod tests {
         convo.push_tool_result("call_123", "result text".to_string());
         assert_eq!(convo.messages().len(), 4);
         assert_eq!(convo.messages()[3]["tool_call_id"], "call_123");
+    }
+
+    #[test]
+    fn builds_multi_tool_decision_set() {
+        let tool_calls = vec![
+            (
+                "call_1".to_string(),
+                "aule_observe".to_string(),
+                r#"{"kind":"finding","content":"first"}"#.to_string(),
+            ),
+            (
+                "call_2".to_string(),
+                "aule_status".to_string(),
+                r#"{"content":"working"}"#.to_string(),
+            ),
+        ];
+
+        let decision = build_tool_decision_set("thinking", &tool_calls).unwrap();
+        assert_eq!(decision.tool_calls.len(), 2);
+        assert_eq!(
+            decision.assistant_message["tool_calls"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(decision.assistant_message["content"], "thinking");
+
+        match &decision.tool_calls[0].action {
+            AgentAction::Observe { kind, content } => {
+                assert_eq!(kind, &ObserveKind::Finding);
+                assert_eq!(content, "first");
+            }
+            _ => panic!("expected observe action"),
+        }
+
+        match &decision.tool_calls[1].action {
+            AgentAction::Status { content } => assert_eq!(content, "working"),
+            _ => panic!("expected status action"),
+        }
+    }
+
+    #[test]
+    fn errors_on_incomplete_tool_call_in_decision_set() {
+        let tool_calls = vec![(
+            "".to_string(),
+            "aule_status".to_string(),
+            r#"{"content":"working"}"#.to_string(),
+        )];
+
+        let err = build_tool_decision_set("", &tool_calls).unwrap_err();
+        assert!(err.to_string().contains("incomplete tool call at index 0"));
     }
 }
