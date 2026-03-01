@@ -58,6 +58,14 @@ export function DashboardPage() {
   const observations = useQuery(sub, (db) => Array.from(db.observation.iter()));
   const agentTypes = useQuery(sub, (db) => Array.from(db.agent_type.iter()));
 
+  if (sub.error) {
+    return (
+      <div className="flex h-full items-center justify-center text-red-400">
+        Subscription error: {sub.error}
+      </div>
+    );
+  }
+
   if (!sub.subscribed) {
     return (
       <div className="flex h-full items-center justify-center text-gray-500">

@@ -32,6 +32,14 @@ type TableDependency = {
   removeOnDelete?: (listener: () => void) => unknown;
 };
 
+/**
+ * Subscribes to a specific query and table dependency set.
+ *
+ * `query` and `dependencies` must be stable references (module-level constants,
+ * `useMemo`, or `useCallback`) to avoid re-subscribing on every render.
+ * See callers in `app/src/routes/AgentTypesPage.tsx`,
+ * `app/src/routes/TasksPage.tsx`, and `app/src/routes/TaskDetailsPage.tsx`.
+ */
 export function useSubscription(
   query: (string | RowTypedQuery<unknown, unknown>)[],
   dependencies: (db: DbConnection["db"]) => TableDependency[],
@@ -115,6 +123,8 @@ export function useQuery<T>(
 ): T | undefined {
   const { ctx } = useSpacetime();
   const { subscribed } = state;
+  // Re-renders come from parent `bump` incrementing `state.version`; this hook
+  // intentionally only gates access on `ctx` and `subscribed`.
   if (!ctx || !subscribed) return undefined;
   return selector(ctx.db);
 }

@@ -17,7 +17,17 @@ const SPACETIMEDB_HOST = "ws://localhost:3000";
 const SPACETIMEDB_DB = "aule";
 const TOKEN_KEY = "aule-spacetimedb-token";
 
-export function SpacetimeProvider({ children }: { children: ReactNode }) {
+interface SpacetimeProviderProps {
+  children: ReactNode;
+  host?: string;
+  databaseName?: string;
+}
+
+export function SpacetimeProvider({
+  children,
+  host = SPACETIMEDB_HOST,
+  databaseName = SPACETIMEDB_DB,
+}: SpacetimeProviderProps) {
   const [state, setState] = useState<SpacetimeContextValue>({
     ctx: null,
     identity: null,
@@ -30,8 +40,8 @@ export function SpacetimeProvider({ children }: { children: ReactNode }) {
     const savedToken = localStorage.getItem(TOKEN_KEY) ?? undefined;
 
     const conn = DbConnection.builder()
-      .withUri(SPACETIMEDB_HOST)
-      .withDatabaseName(SPACETIMEDB_DB)
+      .withUri(host)
+      .withDatabaseName(databaseName)
       .withToken(savedToken)
       .onConnect((ctx: DbConnection, identity: Identity, token: string) => {
         if (cancelled) return;
@@ -49,6 +59,7 @@ export function SpacetimeProvider({ children }: { children: ReactNode }) {
         setState((s) => ({
           ...s,
           ctx: null,
+          identity: null,
           connected: false,
           error: "Failed to connect to SpacetimeDB",
         }));
@@ -58,6 +69,7 @@ export function SpacetimeProvider({ children }: { children: ReactNode }) {
         setState((s) => ({
           ...s,
           ctx: null,
+          identity: null,
           connected: false,
           error: null,
         }));
@@ -70,7 +82,7 @@ export function SpacetimeProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       conn.disconnect();
     };
-  }, []);
+  }, [host, databaseName]);
 
   return (
     <SpacetimeContext.Provider value={state}>
