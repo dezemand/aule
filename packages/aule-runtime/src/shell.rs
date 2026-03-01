@@ -1,4 +1,6 @@
 use std::{
+    io::Read,
+    os::unix::process::CommandExt as _,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -22,8 +24,13 @@ pub fn run_shell(command: &str, timeout: Duration, max_output_bytes: usize) -> R
         .arg(command)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Start the shell in its own process group so we can kill the
+        // entire group (including any child processes) on timeout.
+        .process_group(0)
         .spawn()
         .with_context(|| format!("Failed to spawn shell command: {command}"))?;
+
+    let child_pid = child.id();
 
     let mut timed_out = false;
     loop {
@@ -33,85 +40,100 @@ pub fn run_shell(command: &str, timeout: Duration, max_output_bytes: usize) -> R
 
         if start.elapsed() >= timeout {
             timed_out = true;
-            child.kill().context("Failed to kill timed out process")?;
+            // Kill the entire process group, falling back to child.kill()
+            // if the group kill fails.
+            // Safety: child_pid is a valid pid from a process we spawned.
+            let pgid = child_pid as i32;
+            if unsafe { libc::kill(-pgid, libc::SIGKILL) } != 0 {
+                child.kill().context("Failed to kill timed out process")?;
+            }
             break;
         }
 
         thread::sleep(Duration::from_millis(50));
     }
 
-    let output = child
-        .wait_with_output()
-        .context("Failed to collect shell output")?;
+    // Read stdout/stderr with a cap so a runaway process can't OOM us.
+    // We read cap+1 bytes to detect whether truncation occurred.
+    let cap = max_output_bytes as u64;
+    let (stdout, stdout_truncated) = read_capped(child.stdout.take(), cap)?;
+    let (stderr, stderr_truncated) = read_capped(child.stderr.take(), cap)?;
 
+    let status = child.wait().context("Failed to wait for child process")?;
     let duration_ms = start.elapsed().as_millis();
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    let marker = "\n...[truncated]";
 
     Ok(ShellResult {
-        exit_code: output.status.code(),
-        stdout: truncate_text(&stdout, max_output_bytes),
-        stderr: truncate_text(&stderr, max_output_bytes),
+        exit_code: status.code(),
+        stdout: if stdout_truncated {
+            format!("{stdout}{marker}")
+        } else {
+            stdout
+        },
+        stderr: if stderr_truncated {
+            format!("{stderr}{marker}")
+        } else {
+            stderr
+        },
         timed_out,
         duration_ms,
     })
 }
 
-fn truncate_text(input: &str, max_bytes: usize) -> String {
-    if input.len() <= max_bytes {
-        return input.to_string();
+/// Read up to `cap` bytes from an optional pipe. Returns the string and
+/// whether the output was truncated.
+fn read_capped(pipe: Option<impl Read>, cap: u64) -> Result<(String, bool)> {
+    let Some(pipe) = pipe else {
+        return Ok((String::new(), false));
+    };
+    // Read cap+1 to detect if there's more data beyond the cap.
+    let mut buf = Vec::new();
+    pipe.take(cap + 1)
+        .read_to_end(&mut buf)
+        .context("Failed to read process output")?;
+    let truncated = buf.len() as u64 > cap;
+    if truncated {
+        buf.truncate(cap as usize);
     }
-
-    let marker = "\n...[truncated]";
-
-    // When the limit is smaller than the marker itself, emit a
-    // best-effort truncated marker that fits within max_bytes.
-    if max_bytes < marker.len() {
-        let mut out = String::new();
-        for ch in marker.chars() {
-            if out.len() + ch.len_utf8() > max_bytes {
-                break;
-            }
-            out.push(ch);
-        }
-        return out;
-    }
-
-    let mut out = String::new();
-    for ch in input.chars() {
-        if out.len() + ch.len_utf8() + marker.len() > max_bytes {
-            break;
-        }
-        out.push(ch);
-    }
-    out.push_str(marker);
-    out
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    Ok((text, truncated))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_text;
+    use std::io::Cursor;
+
+    use super::read_capped;
 
     #[test]
-    fn no_truncation_when_within_limit() {
-        assert_eq!(truncate_text("abcdef", 6), "abcdef");
-        assert_eq!(truncate_text("abcdef", 100), "abcdef");
+    fn read_capped_no_truncation() {
+        let data = Cursor::new(b"hello");
+        let (text, truncated) = read_capped(Some(data), 100).unwrap();
+        assert_eq!(text, "hello");
+        assert!(!truncated);
     }
 
     #[test]
-    fn truncates_with_marker_when_over_limit() {
-        // "abcdefghijklmnopqrst" (20 bytes) with max_bytes=19 forces truncation.
-        // Marker "\n...[truncated]" is 15 bytes, leaving 4 bytes for content.
-        let output = truncate_text("abcdefghijklmnopqrst", 19);
-        assert_eq!(output, "abcd\n...[truncated]");
+    fn read_capped_exact_fit() {
+        let data = Cursor::new(b"abcde");
+        let (text, truncated) = read_capped(Some(data), 5).unwrap();
+        assert_eq!(text, "abcde");
+        assert!(!truncated);
     }
 
     #[test]
-    fn truncates_to_just_marker_when_limit_smaller_than_marker() {
-        // max_bytes=4 is smaller than the 15-byte marker, so output is a
-        // best-effort truncation of the marker itself that fits in 4 bytes.
-        let output = truncate_text("abcdef", 4);
-        assert_eq!(output, "\n...");
-        assert!(output.len() <= 4);
+    fn read_capped_truncates() {
+        let data = Cursor::new(b"abcdefghij");
+        let (text, truncated) = read_capped(Some(data), 4).unwrap();
+        assert_eq!(text, "abcd");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn read_capped_none_pipe() {
+        let (text, truncated) = read_capped(None::<Cursor<&[u8]>>, 100).unwrap();
+        assert_eq!(text, "");
+        assert!(!truncated);
     }
 }

@@ -46,11 +46,41 @@ impl Conversation {
 // Agent actions (parsed from tool calls)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObserveKind {
+    Progress,
+    Finding,
+    Error,
+    Result,
+}
+
+impl ObserveKind {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "progress" => Some(Self::Progress),
+            "finding" => Some(Self::Finding),
+            "error" => Some(Self::Error),
+            "result" => Some(Self::Result),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Progress => "progress",
+            Self::Finding => "finding",
+            Self::Error => "error",
+            Self::Result => "result",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AgentAction {
     Shell { command: String },
-    Observe { kind: String, content: String },
+    Observe { kind: ObserveKind, content: String },
     Status { content: String },
     Finish { result: String },
     Fail { error: String },
@@ -97,18 +127,18 @@ pub struct OpenAiClient {
 }
 
 impl OpenAiClient {
-    pub fn new(api_key: String, model: String, rt: tokio::runtime::Handle) -> Self {
+    pub fn new(api_key: String, model: String, rt: tokio::runtime::Handle) -> Result<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .read_timeout(Duration::from_secs(120))
             .build()
-            .expect("failed to build reqwest client");
-        Self {
+            .context("Failed to build HTTP client")?;
+        Ok(Self {
             api_key,
             model,
             http,
             rt,
-        }
+        })
     }
 
     /// Stream a tool decision from OpenAI. Calls `on_event` with buffered
@@ -167,20 +197,21 @@ impl OpenAiClient {
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_millis(250);
 
-        // Consume the response as a byte stream, processing SSE lines
-        // incrementally as they arrive (handles partial lines across chunks).
+        // Consume the response as a raw byte stream, buffering bytes until
+        // complete lines are available. This avoids corrupting multibyte
+        // UTF-8 characters that may be split across HTTP chunks.
         let mut byte_stream = response.bytes_stream();
-        let mut line_buf = String::new();
+        let mut line_buf: Vec<u8> = Vec::new();
         let mut done = false;
 
         while let Some(chunk_result) = byte_stream.next().await {
             let chunk_bytes = chunk_result.context("Error reading SSE stream chunk")?;
-            let chunk_text = String::from_utf8_lossy(&chunk_bytes);
-            line_buf.push_str(&chunk_text);
+            line_buf.extend_from_slice(&chunk_bytes);
 
             // Process all complete lines in the buffer
-            while let Some(newline_pos) = line_buf.find('\n') {
-                let line: String = line_buf.drain(..=newline_pos).collect();
+            while let Some(newline_pos) = line_buf.iter().position(|&b| b == b'\n') {
+                let line_bytes: Vec<u8> = line_buf.drain(..=newline_pos).collect();
+                let line = String::from_utf8_lossy(&line_bytes);
                 let line = line.trim_end();
 
                 if !line.starts_with("data: ") {
@@ -259,14 +290,15 @@ impl OpenAiClient {
                 args_delta: pending_args,
             });
         }
-        on_event(StreamEvent::Done);
 
-        // Parse the completed tool call
+        // Parse the completed tool call before signaling Done, so Done is
+        // only emitted when the tool call is valid.
         if tool_call_id.is_empty() || tool_name.is_empty() {
             bail!("OpenAI stream completed without a tool call");
         }
 
         let action = action_from_tool_call(&tool_name, &tool_args)?;
+        on_event(StreamEvent::Done);
 
         // Build the assistant message for conversation state
         let assistant_message = json!({
@@ -312,8 +344,14 @@ pub fn action_from_tool_call(name: &str, arguments: &str) -> Result<AgentAction>
             if args.content.trim().is_empty() {
                 bail!("aule_observe.content must not be empty");
             }
+            let kind = ObserveKind::parse(&args.kind).with_context(|| {
+                format!(
+                    "Invalid aule_observe kind '{}': must be progress, finding, error, or result",
+                    args.kind
+                )
+            })?;
             Ok(AgentAction::Observe {
-                kind: args.kind,
+                kind,
                 content: args.content,
             })
         }
@@ -505,7 +543,7 @@ struct FailArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentAction, Conversation, action_from_tool_call};
+    use super::{AgentAction, Conversation, ObserveKind, action_from_tool_call};
 
     #[test]
     fn parses_sh_tool_call() {
@@ -523,11 +561,18 @@ mod tests {
                 .unwrap();
         match action {
             AgentAction::Observe { kind, content } => {
-                assert_eq!(kind, "finding");
+                assert_eq!(kind, ObserveKind::Finding);
                 assert_eq!(content, "found it");
             }
             _ => panic!("expected observe action"),
         }
+    }
+
+    #[test]
+    fn errors_on_invalid_observe_kind() {
+        let err =
+            action_from_tool_call("aule_observe", r#"{"kind":"bogus","content":"hi"}"#).unwrap_err();
+        assert!(err.to_string().contains("Invalid aule_observe kind"));
     }
 
     #[test]

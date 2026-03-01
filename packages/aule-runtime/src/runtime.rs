@@ -3,14 +3,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use aule_spacetimedb_client::*;
 use log::{error, info, warn};
-use spacetimedb_sdk::{DbContext, Error, Identity, Table, TableWithPrimaryKey, credentials};
+use spacetimedb_sdk::{credentials, DbContext, Error, Identity, Table, TableWithPrimaryKey};
 
 use crate::{
     config::RuntimeConfig,
-    llm_client::{AgentAction, Conversation, OpenAiClient, StreamEvent},
+    llm_client::{AgentAction, Conversation, ObserveKind, OpenAiClient, StreamEvent},
     shell,
 };
 
@@ -36,7 +36,7 @@ pub fn run(config: RuntimeConfig) -> Result<()> {
         config.openai_api_key.clone(),
         config.openai_model.clone(),
         tokio_rt.handle().clone(),
-    );
+    )?;
 
     event_loop(&ctx, &config, &llm, task_rx)
 }
@@ -310,17 +310,12 @@ fn run_reasoning_loop(
                 conversation.push_tool_result(&decision.tool_call_id, outcome);
             }
             AgentAction::Observe { kind, content } => {
-                if let Some(obs_kind) = parse_observation_kind(&kind) {
-                    post_observation(ctx, task.id, obs_kind, content.clone());
-                    conversation.push_tool_result(
-                        &decision.tool_call_id,
-                        format!("observation posted ({kind})"),
-                    );
-                } else {
-                    let err = format!("invalid observation kind: {kind}");
-                    post_observation(ctx, task.id, ObservationKind::Error, err.clone());
-                    conversation.push_tool_result(&decision.tool_call_id, format!("error: {err}"));
-                }
+                let obs_kind = observe_kind_to_observation_kind(&kind);
+                post_observation(ctx, task.id, obs_kind, content.clone());
+                conversation.push_tool_result(
+                    &decision.tool_call_id,
+                    format!("observation posted ({})", kind.as_str()),
+                );
             }
             AgentAction::Status { content } => {
                 post_observation(
@@ -371,12 +366,11 @@ fn post_observation(ctx: &DbConnection, task_id: u64, kind: ObservationKind, con
     }
 }
 
-fn parse_observation_kind(kind: &str) -> Option<ObservationKind> {
+fn observe_kind_to_observation_kind(kind: &ObserveKind) -> ObservationKind {
     match kind {
-        "progress" => Some(ObservationKind::Progress),
-        "finding" => Some(ObservationKind::Finding),
-        "error" => Some(ObservationKind::Error),
-        "result" => Some(ObservationKind::Result),
-        _ => None,
+        ObserveKind::Progress => ObservationKind::Progress,
+        ObserveKind::Finding => ObservationKind::Finding,
+        ObserveKind::Error => ObservationKind::Error,
+        ObserveKind::Result => ObservationKind::Result,
     }
 }
