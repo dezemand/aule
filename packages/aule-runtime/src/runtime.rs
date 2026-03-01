@@ -222,9 +222,16 @@ fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>
                     Ok(None) => continue,
                     Err(err) => {
                         error!("Task {task_id} could not be prepared: {err:#}");
-                        let _ = ctx
-                            .reducers
-                            .fail_task(task_id, format!("runtime error: {err:#}"));
+                        let fail_message = format!("runtime error: {err:#}");
+                        if let Err(mark_err) = retry_reducer("fail_task(prepare)", || {
+                            ctx.reducers
+                                .fail_task(task_id, fail_message.clone())
+                                .with_context(|| format!("Failed to mark task {task_id} as failed"))
+                        }) {
+                            error!(
+                                "Task {task_id} could not be marked failed after prepare error: {mark_err:#}"
+                            );
+                        }
                         continue;
                     }
                 };
@@ -265,9 +272,14 @@ fn process_task_execution_report(
         TaskExecutionReport::Failed { task_id, error } => {
             in_flight_tasks.remove(&task_id);
             error!("Task {task_id} execution failed: {error}");
-            let _ = ctx
-                .reducers
-                .fail_task(task_id, format!("runtime error: {error}"));
+            let fail_message = format!("runtime error: {error}");
+            if let Err(err) = retry_reducer("fail_task(report)", || {
+                ctx.reducers
+                    .fail_task(task_id, fail_message.clone())
+                    .with_context(|| format!("Failed to mark task {task_id} as failed"))
+            }) {
+                error!("Task {task_id} could not be marked failed: {err:#}");
+            }
         }
     }
 }
@@ -598,6 +610,9 @@ fn run_task_worker(config: RuntimeConfig, prepared: PreparedTask) -> Result<()> 
     let llm = OpenAiClient::new(
         config.openai_api_key.clone(),
         config.openai_model.clone(),
+        config.llm_max_retries,
+        config.llm_retry_base_delay_ms,
+        config.llm_retry_max_delay_ms,
         tokio_rt,
     )?;
 
@@ -630,9 +645,11 @@ fn execute_prepared_task(
 ) -> Result<()> {
     let task_id = task.id;
 
-    ctx.reducers
-        .start_task(task_id)
-        .with_context(|| format!("Failed to start task {task_id}"))?;
+    retry_reducer("start_task", || {
+        ctx.reducers
+            .start_task(task_id)
+            .with_context(|| format!("Failed to start task {task_id}"))
+    })?;
     info!("Started task #{task_id}: {}", task.title);
 
     post_observation(
@@ -682,7 +699,7 @@ fn run_reasoning_loop(
     let mut conversation = Conversation::new(system_prompt, &initial_user_prompt);
 
     for turn in 1..=config.max_steps_per_task {
-        let llm_response_event_id = next_runtime_event_id(task.id, turn, "llm-response");
+        let mut llm_response_event_id = next_runtime_event_id(task.id, turn, "llm-response");
         let mut llm_response_content = String::new();
 
         create_runtime_event(
@@ -715,6 +732,26 @@ fn run_reasoning_loop(
                         ctx,
                         llm_response_event_id.clone(),
                         llm_response_content.clone(),
+                    );
+                }
+                StreamEvent::Retry { attempt, error } => {
+                    warn!(
+                        "task #{} turn {} retrying LLM stream (attempt {}): {}",
+                        task.id, turn, attempt, error
+                    );
+                    llm_response_event_id = next_runtime_event_id(
+                        task.id,
+                        turn,
+                        &format!("llm-response-retry-{attempt}"),
+                    );
+                    llm_response_content.clear();
+                    create_runtime_event(
+                        ctx,
+                        llm_response_event_id.clone(),
+                        task.id,
+                        turn,
+                        RuntimeEventType::LlmResponse,
+                        format!("[retry attempt {attempt}] restarting OpenAI stream"),
                     );
                 }
                 StreamEvent::Done => {}
@@ -825,9 +862,11 @@ fn run_reasoning_loop(
                             terminal_call.tool_call_id
                         ),
                     );
-                    ctx.reducers
-                        .complete_task(task.id, result)
-                        .with_context(|| format!("Failed to complete task {}", task.id))?;
+                    retry_reducer("complete_task", || {
+                        ctx.reducers
+                            .complete_task(task.id, result.clone())
+                            .with_context(|| format!("Failed to complete task {}", task.id))
+                    })?;
                     info!("Completed task #{}", task.id);
                     return Ok(());
                 }
@@ -850,9 +889,11 @@ fn run_reasoning_loop(
                             terminal_call.tool_call_id
                         ),
                     );
-                    ctx.reducers
-                        .fail_task(task.id, error)
-                        .with_context(|| format!("Failed to mark task {} as failed", task.id))?;
+                    retry_reducer("fail_task", || {
+                        ctx.reducers
+                            .fail_task(task.id, error.clone())
+                            .with_context(|| format!("Failed to mark task {} as failed", task.id))
+                    })?;
                     info!("Marked task #{} as failed", task.id);
                     return Ok(());
                 }
@@ -871,9 +912,11 @@ fn run_reasoning_loop(
         config.max_steps_per_task
     );
     post_observation(ctx, task.id, ObservationKind::Error, msg.clone());
-    ctx.reducers
-        .fail_task(task.id, msg)
-        .with_context(|| format!("Failed to fail task {} after max steps", task.id))?;
+    retry_reducer("fail_task(max_steps)", || {
+        ctx.reducers
+            .fail_task(task.id, msg.clone())
+            .with_context(|| format!("Failed to fail task {} after max steps", task.id))
+    })?;
     Ok(())
 }
 
@@ -952,6 +995,27 @@ fn execute_non_terminal_tool_calls(
                         format!("tool_call_id={tool_call_id}\nresult={tool_result}"),
                     );
                     tool_results.push((index, tool_call_id, tool_result));
+                }
+                AgentAction::Invalid { error } => {
+                    warn!(
+                        "task #{} turn {} invalid tool call[{}]: {}",
+                        task_id, turn, index, error
+                    );
+                    post_observation(
+                        ctx,
+                        task_id,
+                        ObservationKind::Error,
+                        format!("Model produced an invalid tool call: {error}"),
+                    );
+                    create_runtime_event(
+                        ctx,
+                        next_runtime_event_id(task_id, turn, &format!("tool-{index}-result")),
+                        task_id,
+                        turn,
+                        RuntimeEventType::ToolResult,
+                        format!("tool_call_id={tool_call_id}\nresult={error}"),
+                    );
+                    tool_results.push((index, tool_call_id, error));
                 }
                 AgentAction::Finish { .. } | AgentAction::Fail { .. } => {
                     warn!(
@@ -1088,6 +1152,73 @@ fn execute_non_terminal_tool_calls(
     tool_results
 }
 
+fn retry_reducer<T, F>(label: &str, mut operation: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    const MAX_RETRIES: u32 = 2;
+
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 0..=MAX_RETRIES {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                let attempt_number = attempt + 1;
+                let retryable = is_retryable_reducer_error(&err);
+                warn!(
+                    "{label} failed on attempt {attempt_number}/{} (retryable={}): {:#}",
+                    MAX_RETRIES + 1,
+                    retryable,
+                    err
+                );
+                last_error = Some(err);
+
+                if !retryable {
+                    break;
+                }
+
+                if attempt < MAX_RETRIES {
+                    let backoff_ms = 200 * u64::from(attempt_number);
+                    thread::sleep(Duration::from_millis(backoff_ms));
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("{label} failed without an error")))
+}
+
+fn is_retryable_reducer_error(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_lowercase();
+
+    let permanent_markers = [
+        "can only",
+        "only the assigned runtime",
+        "already",
+        "not found",
+        "cannot",
+        "invalid",
+    ];
+    if permanent_markers.iter().any(|marker| msg.contains(marker)) {
+        return false;
+    }
+
+    let transient_markers = [
+        "connection",
+        "network",
+        "disconnected",
+        "timed out",
+        "timeout",
+        "transport",
+        "temporarily unavailable",
+        "websocket",
+        "i/o",
+        "io error",
+    ];
+
+    transient_markers.iter().any(|marker| msg.contains(marker))
+}
+
 fn post_observation(ctx: &DbConnection, task_id: u64, kind: ObservationKind, content: String) {
     let content_len = content.len();
     if let Err(err) = ctx.reducers.post_observation(task_id, kind, content) {
@@ -1138,5 +1269,56 @@ fn observe_kind_to_observation_kind(kind: &ObserveKind) -> ObservationKind {
         ObserveKind::Finding => ObservationKind::Finding,
         ObserveKind::Error => ObservationKind::Error,
         ObserveKind::Result => ObservationKind::Result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use anyhow::{Result, anyhow};
+
+    use super::{is_retryable_reducer_error, retry_reducer};
+
+    #[test]
+    fn retryable_reducer_error_classifier_handles_permanent_and_transient_errors() {
+        let permanent = anyhow!("Task is Running, can only start Assigned tasks");
+        assert!(!is_retryable_reducer_error(&permanent));
+
+        let transient = anyhow!("connection timed out while sending reducer request");
+        assert!(is_retryable_reducer_error(&transient));
+
+        let unknown = anyhow!("unexpected reducer failure in downstream handler");
+        assert!(!is_retryable_reducer_error(&unknown));
+    }
+
+    #[test]
+    fn retry_reducer_stops_immediately_for_non_retryable_errors() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<()> = retry_reducer("start_task", || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err(anyhow!("Task is Running, can only start Assigned tasks"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retry_reducer_retries_transient_errors_then_succeeds() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<u32> = retry_reducer("complete_task", || {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt < 2 {
+                Err(anyhow!(
+                    "connection timed out while sending reducer request"
+                ))
+            } else {
+                Ok(42)
+            }
+        });
+
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 }

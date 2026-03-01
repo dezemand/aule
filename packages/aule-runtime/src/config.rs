@@ -15,6 +15,9 @@ pub struct RuntimeConfig {
     pub shell_timeout: Duration,
     pub shell_output_limit_bytes: usize,
     pub max_steps_per_task: u32,
+    pub llm_max_retries: u32,
+    pub llm_retry_base_delay_ms: u64,
+    pub llm_retry_max_delay_ms: u64,
 }
 
 impl fmt::Debug for RuntimeConfig {
@@ -31,6 +34,9 @@ impl fmt::Debug for RuntimeConfig {
             .field("shell_timeout", &self.shell_timeout)
             .field("shell_output_limit_bytes", &self.shell_output_limit_bytes)
             .field("max_steps_per_task", &self.max_steps_per_task)
+            .field("llm_max_retries", &self.llm_max_retries)
+            .field("llm_retry_base_delay_ms", &self.llm_retry_base_delay_ms)
+            .field("llm_retry_max_delay_ms", &self.llm_retry_max_delay_ms)
             .finish()
     }
 }
@@ -72,12 +78,24 @@ impl RuntimeConfig {
         let shell_output_limit_bytes =
             parse_usize_with_default("AULE_SHELL_OUTPUT_LIMIT_BYTES", 50_000)?;
         let max_steps_per_task = parse_u32_with_default("AULE_MAX_STEPS_PER_TASK", 24)?;
+        let llm_max_retries = parse_u32_with_default("AULE_LLM_MAX_RETRIES", 3)?;
+        let llm_retry_base_delay_ms = parse_u64_with_default("AULE_LLM_RETRY_BASE_MS", 1_000)?;
+        let llm_retry_max_delay_ms = parse_u64_with_default("AULE_LLM_RETRY_MAX_MS", 10_000)?;
 
         if shell_output_limit_bytes == 0 {
             bail!("AULE_SHELL_OUTPUT_LIMIT_BYTES cannot be 0");
         }
         if max_steps_per_task == 0 {
             bail!("AULE_MAX_STEPS_PER_TASK cannot be 0");
+        }
+        if llm_retry_base_delay_ms == 0 {
+            bail!("AULE_LLM_RETRY_BASE_MS cannot be 0");
+        }
+        if llm_retry_max_delay_ms == 0 {
+            bail!("AULE_LLM_RETRY_MAX_MS cannot be 0");
+        }
+        if llm_retry_base_delay_ms > llm_retry_max_delay_ms {
+            bail!("AULE_LLM_RETRY_BASE_MS cannot exceed AULE_LLM_RETRY_MAX_MS");
         }
 
         if runtime_name.trim().is_empty() {
@@ -96,6 +114,9 @@ impl RuntimeConfig {
             shell_timeout,
             shell_output_limit_bytes,
             max_steps_per_task,
+            llm_max_retries,
+            llm_retry_base_delay_ms,
+            llm_retry_max_delay_ms,
         })
     }
 }
