@@ -1,8 +1,10 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
+use log::warn;
 use reqwest::Client;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -86,6 +88,7 @@ pub enum AgentAction {
     Status { content: String },
     Finish { result: String },
     Fail { error: String },
+    Invalid { error: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +104,26 @@ pub enum StreamEvent {
         tool_name: String,
         args_delta: String,
     },
+    /// The stream failed transiently and will be retried.
+    Retry { attempt: u32, error: String },
     /// Generation is complete; final tool decision is available.
     Done,
+}
+
+#[derive(Debug)]
+enum LlmStreamError {
+    Retryable(anyhow::Error),
+    Fatal(anyhow::Error),
+}
+
+impl LlmStreamError {
+    fn retryable(err: anyhow::Error) -> Self {
+        Self::Retryable(err)
+    }
+
+    fn fatal(err: anyhow::Error) -> Self {
+        Self::Fatal(err)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,12 +148,22 @@ pub struct ToolDecision {
 pub struct OpenAiClient {
     api_key: String,
     model: String,
+    max_retries: u32,
+    retry_base_delay_ms: u64,
+    retry_max_delay_ms: u64,
     http: Client,
     rt: tokio::runtime::Runtime,
 }
 
 impl OpenAiClient {
-    pub fn new(api_key: String, model: String, rt: tokio::runtime::Runtime) -> Result<Self> {
+    pub fn new(
+        api_key: String,
+        model: String,
+        max_retries: u32,
+        retry_base_delay_ms: u64,
+        retry_max_delay_ms: u64,
+        rt: tokio::runtime::Runtime,
+    ) -> Result<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .read_timeout(Duration::from_secs(120))
@@ -141,6 +172,9 @@ impl OpenAiClient {
         Ok(Self {
             api_key,
             model,
+            max_retries,
+            retry_base_delay_ms,
+            retry_max_delay_ms,
             http,
             rt,
         })
@@ -154,15 +188,51 @@ impl OpenAiClient {
         conversation: &Conversation,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<ToolDecision> {
-        self.rt
-            .block_on(self.stream_inner(conversation, &mut on_event))
+        for attempt in 0..=self.max_retries {
+            match self
+                .rt
+                .block_on(self.stream_inner(conversation, &mut on_event))
+            {
+                Ok(decision) => return Ok(decision),
+                Err(LlmStreamError::Fatal(err)) => return Err(err),
+                Err(LlmStreamError::Retryable(err)) => {
+                    if attempt >= self.max_retries {
+                        return Err(err.context(format!(
+                            "OpenAI streaming failed after {} attempts",
+                            self.max_retries + 1
+                        )));
+                    }
+
+                    let delay_ms = compute_retry_delay_ms(
+                        self.retry_base_delay_ms,
+                        self.retry_max_delay_ms,
+                        attempt,
+                    );
+                    let next_attempt = attempt + 2;
+                    warn!(
+                        "OpenAI streaming transient failure (attempt {}/{}): {:#}; retrying in {}ms",
+                        attempt + 1,
+                        self.max_retries + 1,
+                        err,
+                        delay_ms
+                    );
+                    on_event(StreamEvent::Retry {
+                        attempt: next_attempt,
+                        error: format!("{err:#}"),
+                    });
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                }
+            }
+        }
+
+        Err(anyhow!("OpenAI streaming retry loop ended unexpectedly"))
     }
 
     async fn stream_inner(
         &self,
         conversation: &Conversation,
         on_event: &mut dyn FnMut(StreamEvent),
-    ) -> Result<ToolDecision> {
+    ) -> std::result::Result<ToolDecision, LlmStreamError> {
         let body = json!({
             "model": self.model,
             "temperature": 0.1,
@@ -180,7 +250,9 @@ impl OpenAiClient {
             .json(&body)
             .send()
             .await
-            .context("OpenAI streaming request failed")?;
+            .map_err(|err| {
+                LlmStreamError::retryable(anyhow!("OpenAI streaming request failed: {err:#}"))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -188,7 +260,11 @@ impl OpenAiClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<failed to read body>".to_string());
-            bail!("OpenAI request failed with {status}: {err_body}");
+            let err = anyhow!("OpenAI request failed with {status}: {err_body}");
+            if is_retryable_http_status(status) {
+                return Err(LlmStreamError::retryable(err));
+            }
+            return Err(LlmStreamError::fatal(err));
         }
 
         // Accumulation state — track tool calls by index so parallel calls
@@ -210,7 +286,7 @@ impl OpenAiClient {
         let mut line_buf: Vec<u8> = Vec::new();
         let mut done = false;
 
-        let mut process_sse_line = |raw_line: &str| -> Result<bool> {
+        let mut process_sse_line = |raw_line: &str| -> std::result::Result<bool, LlmStreamError> {
             let line = raw_line.trim_end();
             if !line.starts_with("data: ") {
                 return Ok(false);
@@ -246,19 +322,19 @@ impl OpenAiClient {
                     let idx = tc_delta.index.unwrap_or(0);
 
                     if idx >= MAX_TOOL_CALLS_PER_RESPONSE {
-                        bail!(
+                        return Err(LlmStreamError::fatal(anyhow!(
                             "OpenAI stream returned tool call index {} exceeding maximum {}",
                             idx,
                             MAX_TOOL_CALLS_PER_RESPONSE
-                        );
+                        )));
                     }
 
                     if idx > tool_calls.len() {
-                        bail!(
+                        return Err(LlmStreamError::fatal(anyhow!(
                             "OpenAI stream returned out-of-order tool call index {} (current_len={})",
                             idx,
                             tool_calls.len()
-                        );
+                        )));
                     }
 
                     if idx == tool_calls.len() {
@@ -301,7 +377,9 @@ impl OpenAiClient {
         };
 
         while let Some(chunk_result) = byte_stream.next().await {
-            let chunk_bytes = chunk_result.context("Error reading SSE stream chunk")?;
+            let chunk_bytes = chunk_result.map_err(|err| {
+                LlmStreamError::retryable(anyhow!("Error reading SSE stream chunk: {err:#}"))
+            })?;
             line_buf.extend_from_slice(&chunk_bytes);
 
             // Process all complete lines in the buffer
@@ -339,20 +417,34 @@ impl OpenAiClient {
         // Verify the stream completed normally (received `data: [DONE]`)
         // before attempting to parse the tool call.
         if !done {
-            bail!("OpenAI SSE stream ended without a [DONE] marker (connection may have dropped)");
+            return Err(LlmStreamError::retryable(anyhow!(
+                "OpenAI SSE stream ended without a [DONE] marker (connection may have dropped)"
+            )));
         }
 
         if tool_calls.is_empty() {
-            bail!("OpenAI stream completed without a tool call");
+            return Err(LlmStreamError::fatal(anyhow!(
+                "OpenAI stream completed without a tool call"
+            )));
         }
 
         // Use the first tool call as the action to execute this turn.
         let (ref tc_id, ref tc_name, ref tc_args) = tool_calls[0];
         if tc_id.is_empty() || tc_name.is_empty() {
-            bail!("OpenAI stream completed with an incomplete tool call");
+            return Err(LlmStreamError::fatal(anyhow!(
+                "OpenAI stream completed with an incomplete tool call"
+            )));
         }
 
-        let action = action_from_tool_call(tc_name, tc_args)?;
+        let action = match action_from_tool_call(tc_name, tc_args) {
+            Ok(action) => action,
+            Err(err) => AgentAction::Invalid {
+                error: format!(
+                    "Invalid tool call '{}' (id={}): {:#}. Return a valid tool call.",
+                    tc_name, tc_id, err
+                ),
+            },
+        };
         on_event(StreamEvent::Done);
 
         // Build the assistant message including ALL tool calls for correct
@@ -553,6 +645,33 @@ fn tool_definitions() -> Vec<Value> {
     ]
 }
 
+fn is_retryable_http_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn compute_retry_delay_ms(base_ms: u64, max_ms: u64, attempt: u32) -> u64 {
+    let exp = 1u64.checked_shl(attempt.min(16)).unwrap_or(u64::MAX);
+    let backoff = base_ms.saturating_mul(exp).min(max_ms);
+    let jitter_range = (base_ms / 2).max(1);
+    let jitter = pseudo_random_u64() % jitter_range;
+    backoff.saturating_add(jitter).min(max_ms)
+}
+
+fn pseudo_random_u64() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    nanos.rotate_left(13) ^ nanos.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
 // ---------------------------------------------------------------------------
 // SSE chunk types (OpenAI streaming format)
 // ---------------------------------------------------------------------------
@@ -622,7 +741,12 @@ struct FailArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentAction, Conversation, ObserveKind, action_from_tool_call};
+    use reqwest::StatusCode;
+
+    use super::{
+        AgentAction, Conversation, ObserveKind, action_from_tool_call, compute_retry_delay_ms,
+        is_retryable_http_status,
+    };
 
     #[test]
     fn parses_sh_tool_call() {
@@ -690,5 +814,30 @@ mod tests {
         convo.push_tool_result("call_123", "result text".to_string());
         assert_eq!(convo.messages().len(), 4);
         assert_eq!(convo.messages()[3]["tool_call_id"], "call_123");
+    }
+
+    #[test]
+    fn retryable_http_statuses_are_classified_correctly() {
+        assert!(is_retryable_http_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(is_retryable_http_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(is_retryable_http_status(StatusCode::BAD_GATEWAY));
+        assert!(is_retryable_http_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(is_retryable_http_status(StatusCode::GATEWAY_TIMEOUT));
+
+        assert!(!is_retryable_http_status(StatusCode::BAD_REQUEST));
+        assert!(!is_retryable_http_status(StatusCode::UNAUTHORIZED));
+        assert!(!is_retryable_http_status(StatusCode::FORBIDDEN));
+    }
+
+    #[test]
+    fn retry_delay_respects_bounds() {
+        let base_ms = 1_000;
+        let max_ms = 10_000;
+        let delay_attempt_0 = compute_retry_delay_ms(base_ms, max_ms, 0);
+        assert!((1_000..=1_499).contains(&delay_attempt_0));
+
+        let delay_large_attempt = compute_retry_delay_ms(base_ms, max_ms, 8);
+        assert!(delay_large_attempt <= max_ms);
+        assert!(delay_large_attempt > 0);
     }
 }
