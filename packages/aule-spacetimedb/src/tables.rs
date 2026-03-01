@@ -6,7 +6,11 @@
 //! - Runtime metadata: runtime_profiles, runtime_platform_info, runtime_resource_sample
 //! - Observations: observations, runtime_events
 
-use spacetimedb::{Identity, SpacetimeType, Timestamp, table};
+use spacetimedb::{table, Identity, ScheduleAt, SpacetimeType, Timestamp};
+
+use crate::reducers::{
+    runtime_events::prune_runtime_events, runtime_metadata::prune_runtime_resource_samples,
+};
 
 // ---------------------------------------------------------------------------
 // Identity domain
@@ -69,6 +73,8 @@ pub struct RuntimePlatformInfo {
 }
 
 /// High-frequency resource usage samples for a runtime.
+///
+/// Rows are pruned by the scheduled `prune_runtime_resource_samples` reducer.
 #[table(accessor = runtime_resource_sample, public)]
 pub struct RuntimeResourceSample {
     #[auto_inc]
@@ -227,7 +233,8 @@ pub enum ObservationKind {
 /// Internal runtime logs for task execution.
 ///
 /// Unlike observations, these are optimized for verbose streaming/debug output
-/// and are intended for log viewers.
+/// and are intended for log viewers. Rows are pruned by the scheduled
+/// `prune_runtime_events` reducer.
 #[table(accessor = runtime_event, public)]
 pub struct RuntimeEvent {
     #[primary_key]
@@ -255,4 +262,29 @@ pub enum RuntimeEventType {
     ToolResult,
     /// Full shell stdout/stderr payload.
     ShellOutput,
+}
+
+/// Scheduler row for periodic runtime resource sample pruning.
+#[table(
+    accessor = runtime_resource_sample_prune_schedule,
+    scheduled(prune_runtime_resource_samples)
+)]
+pub struct RuntimeResourceSamplePruneSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub retention_seconds: u64,
+    pub prune_batch_size: u32,
+}
+
+/// Scheduler row for periodic runtime event pruning.
+#[table(accessor = runtime_event_prune_schedule, scheduled(prune_runtime_events))]
+pub struct RuntimeEventPruneSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub retention_seconds: u64,
+    pub prune_batch_size: u32,
 }

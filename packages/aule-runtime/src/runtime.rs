@@ -171,21 +171,7 @@ fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>
     let runtime_instance_id = format!("{}-{}", std::process::id(), start_millis);
 
     loop {
-        while let Ok(report) = task_result_rx.try_recv() {
-            match report {
-                TaskExecutionReport::Succeeded { task_id } => {
-                    in_flight_tasks.remove(&task_id);
-                    info!("Task {task_id} worker finished successfully");
-                }
-                TaskExecutionReport::Failed { task_id, error } => {
-                    in_flight_tasks.remove(&task_id);
-                    error!("Task {task_id} execution failed: {error}");
-                    let _ = ctx
-                        .reducers
-                        .fail_task(task_id, format!("runtime error: {error}"));
-                }
-            }
-        }
+        drain_task_reports(ctx, &mut in_flight_tasks, &task_result_rx);
 
         if !registered && ctx.try_identity().is_some() {
             match ctx.reducers.register_runtime(config.runtime_name.clone()) {
@@ -241,25 +227,41 @@ fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>
                 spawn_task_worker(config.clone(), prepared, task_result_tx.clone());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                while let Ok(report) = task_result_rx.try_recv() {
-                    match report {
-                        TaskExecutionReport::Succeeded { task_id } => {
-                            in_flight_tasks.remove(&task_id);
-                            info!("Task {task_id} worker finished successfully");
-                        }
-                        TaskExecutionReport::Failed { task_id, error } => {
-                            in_flight_tasks.remove(&task_id);
-                            error!("Task {task_id} execution failed: {error}");
-                            let _ = ctx
-                                .reducers
-                                .fail_task(task_id, format!("runtime error: {error}"));
-                        }
-                    }
-                }
+                drain_task_reports(ctx, &mut in_flight_tasks, &task_result_rx);
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 bail!("Task queue disconnected");
             }
+        }
+    }
+}
+
+fn drain_task_reports(
+    ctx: &DbConnection,
+    in_flight_tasks: &mut HashSet<u64>,
+    task_result_rx: &Receiver<TaskExecutionReport>,
+) {
+    while let Ok(report) = task_result_rx.try_recv() {
+        process_task_execution_report(ctx, in_flight_tasks, report);
+    }
+}
+
+fn process_task_execution_report(
+    ctx: &DbConnection,
+    in_flight_tasks: &mut HashSet<u64>,
+    report: TaskExecutionReport,
+) {
+    match report {
+        TaskExecutionReport::Succeeded { task_id } => {
+            in_flight_tasks.remove(&task_id);
+            info!("Task {task_id} worker finished successfully");
+        }
+        TaskExecutionReport::Failed { task_id, error } => {
+            in_flight_tasks.remove(&task_id);
+            error!("Task {task_id} execution failed: {error}");
+            let _ = ctx
+                .reducers
+                .fail_task(task_id, format!("runtime error: {error}"));
         }
     }
 }
@@ -479,8 +481,30 @@ fn read_thread_count() -> Option<u32> {
                 return rest.trim().parse::<u32>().ok();
             }
         }
+        None
     }
-    None
+
+    #[cfg(target_os = "macos")]
+    {
+        let pid = std::process::id().to_string();
+        let output = std::process::Command::new("ps")
+            .args(["-o", "thcount=", "-p", pid.as_str()])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8(output.stdout).ok()?;
+        stdout
+            .lines()
+            .find_map(|line| line.trim().parse::<u32>().ok())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
 }
 
 fn read_open_fd_count() -> Option<u32> {
@@ -543,15 +567,22 @@ fn spawn_task_worker(
 }
 
 fn run_task_worker(config: RuntimeConfig, prepared: PreparedTask) -> Result<()> {
+    // Each run_task_worker thread opens its own connection via connect_to_db so
+    // streaming callbacks and reducer calls stay isolated per task. The
+    // trade-off is extra connection overhead under high concurrency.
     let ctx = connect_to_db(&config)?;
     let _network_thread = ctx.run_threaded();
 
+    let (identity_timeout, identity_poll_interval) = worker_identity_wait_config();
     let wait_start = Instant::now();
     while ctx.try_identity().is_none() {
-        if wait_start.elapsed() > Duration::from_secs(5) {
-            bail!("Worker connection did not obtain identity within 5 seconds");
+        if wait_start.elapsed() > identity_timeout {
+            bail!(
+                "Worker connection did not obtain identity within {}ms",
+                identity_timeout.as_millis()
+            );
         }
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(identity_poll_interval);
     }
 
     let tokio_rt = tokio::runtime::Builder::new_current_thread()
@@ -565,6 +596,23 @@ fn run_task_worker(config: RuntimeConfig, prepared: PreparedTask) -> Result<()> 
     )?;
 
     execute_prepared_task(&ctx, &config, &llm, &prepared.task, &prepared.system_prompt)
+}
+
+fn worker_identity_wait_config() -> (Duration, Duration) {
+    let timeout_ms = env::var("AULE_WORKER_IDENTITY_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(5_000);
+    let poll_ms = env::var("AULE_WORKER_IDENTITY_POLL_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(25);
+    (
+        Duration::from_millis(timeout_ms),
+        Duration::from_millis(poll_ms),
+    )
 }
 
 fn execute_prepared_task(
@@ -876,6 +924,11 @@ fn create_runtime_event(
     event_type: RuntimeEventType,
     content: String,
 ) {
+    if turn == 0 {
+        warn!("create_runtime_event called with invalid turn 0 for task {task_id}");
+        return;
+    }
+
     if let Err(err) =
         ctx.reducers
             .create_runtime_event(id.clone(), task_id, turn, event_type, content)

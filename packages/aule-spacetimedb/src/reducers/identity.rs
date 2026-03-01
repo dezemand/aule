@@ -1,9 +1,9 @@
 //! Identity reducers: runtime registration, deregistration, heartbeat.
 
-use spacetimedb::{ReducerContext, Table, reducer};
+use spacetimedb::{reducer, ReducerContext, Table};
 
 use crate::tables::{
-    AgentRuntime, AgentTask, RuntimeStatus, TaskStatus, agent_runtime, agent_task,
+    agent_runtime, agent_task, AgentRuntime, AgentTask, RuntimeStatus, TaskStatus,
 };
 
 /// Register a new agent runtime. Called by an agent process after connecting.

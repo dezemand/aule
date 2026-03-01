@@ -73,4 +73,4 @@ The runtime should start the task, post observations, and complete or fail it.
 
 - Phase 2 runtime selects prompt by `AULE_AGENT_VERSION` and requires that version to be `Active`.
 - `aule_status` is currently represented as progress observations.
-- `shell` commands run via `sh -lc` with timeout and output truncation.
+- `sh` commands run via `sh -lc` with timeout and output truncation.

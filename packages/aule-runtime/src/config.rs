@@ -41,23 +41,44 @@ impl RuntimeConfig {
             env::var("SPACETIMEDB_URI").unwrap_or_else(|_| "http://localhost:3000".to_string());
         let spacetimedb_db_name =
             env::var("SPACETIMEDB_DB_NAME").unwrap_or_else(|_| "aule".to_string());
-        let runtime_name =
-            env::var("AULE_RUNTIME_NAME").unwrap_or_else(|_| "runtime-01".to_string());
+        let runtime_name = env::var("AULE_RUNTIME_NAME")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "runtime-01".to_string());
 
         let agent_version = required("AULE_AGENT_VERSION")?;
         let openai_api_key = required("OPENAI_API_KEY")?;
-        let openai_model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+        let openai_model = env::var("OPENAI_MODEL")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "gpt-4.1-mini".to_string());
 
-        let heartbeat_interval =
-            Duration::from_secs(parse_u64_with_default("AULE_HEARTBEAT_SECONDS", 10)?);
-        let resource_sample_interval =
-            Duration::from_secs(parse_u64_with_default("AULE_RESOURCE_SAMPLE_SECONDS", 30)?);
-        let shell_timeout =
-            Duration::from_secs(parse_u64_with_default("AULE_SHELL_TIMEOUT_SECONDS", 30)?);
+        let heartbeat_seconds = parse_u64_with_default("AULE_HEARTBEAT_SECONDS", 10)?;
+        let resource_sample_seconds = parse_u64_with_default("AULE_RESOURCE_SAMPLE_SECONDS", 30)?;
+        let shell_timeout_seconds = parse_u64_with_default("AULE_SHELL_TIMEOUT_SECONDS", 30)?;
+
+        if heartbeat_seconds == 0 {
+            bail!("AULE_HEARTBEAT_SECONDS cannot be 0");
+        }
+        if resource_sample_seconds == 0 {
+            bail!("AULE_RESOURCE_SAMPLE_SECONDS cannot be 0");
+        }
+        if shell_timeout_seconds == 0 {
+            bail!("AULE_SHELL_TIMEOUT_SECONDS cannot be 0");
+        }
+
+        let heartbeat_interval = Duration::from_secs(heartbeat_seconds);
+        let resource_sample_interval = Duration::from_secs(resource_sample_seconds);
+        let shell_timeout = Duration::from_secs(shell_timeout_seconds);
 
         let shell_output_limit_bytes =
             parse_usize_with_default("AULE_SHELL_OUTPUT_LIMIT_BYTES", 50_000)?;
         let max_steps_per_task = parse_u32_with_default("AULE_MAX_STEPS_PER_TASK", 24)?;
+
+        if shell_output_limit_bytes == 0 {
+            bail!("AULE_SHELL_OUTPUT_LIMIT_BYTES cannot be 0");
+        }
+        if max_steps_per_task == 0 {
+            bail!("AULE_MAX_STEPS_PER_TASK cannot be 0");
+        }
 
         if runtime_name.trim().is_empty() {
             bail!("AULE_RUNTIME_NAME must not be empty");

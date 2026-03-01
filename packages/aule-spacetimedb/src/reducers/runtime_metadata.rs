@@ -1,11 +1,16 @@
 //! Runtime metadata reducers: profile, platform info, and resource samples.
 
-use spacetimedb::{ReducerContext, Table, reducer};
+use spacetimedb::{reducer, ReducerContext, Table, TimeDuration};
 
 use crate::tables::{
-    RuntimeEnvironment, RuntimePlatformInfo, RuntimeProfile, RuntimeResourceSample, agent_runtime,
-    runtime_platform_info, runtime_profile, runtime_resource_sample,
+    agent_runtime, runtime_platform_info, runtime_profile, runtime_resource_sample,
+    runtime_resource_sample_prune_schedule, RuntimeEnvironment, RuntimePlatformInfo,
+    RuntimeProfile, RuntimeResourceSample, RuntimeResourceSamplePruneSchedule,
 };
+
+const RUNTIME_RESOURCE_SAMPLE_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+const RUNTIME_RESOURCE_SAMPLE_ROLLUP_INTERVAL_SECONDS: u64 = 5 * 60;
+const RUNTIME_RESOURCE_SAMPLE_PRUNE_BATCH_SIZE: usize = 500;
 
 #[reducer]
 pub fn upsert_runtime_profile(
@@ -18,6 +23,22 @@ pub fn upsert_runtime_profile(
     os: String,
     arch: String,
 ) -> Result<(), String> {
+    if runtime_instance_id.trim().is_empty() {
+        return Err("runtime_instance_id must not be empty".to_string());
+    }
+    if runtime_name.trim().is_empty() {
+        return Err("runtime_name must not be empty".to_string());
+    }
+    if runtime_version.trim().is_empty() {
+        return Err("runtime_version must not be empty".to_string());
+    }
+    if os.trim().is_empty() {
+        return Err("os must not be empty".to_string());
+    }
+    if arch.trim().is_empty() {
+        return Err("arch must not be empty".to_string());
+    }
+
     let sender = ctx.sender();
     ensure_registered_runtime(ctx, sender)?;
 
@@ -138,7 +159,81 @@ pub fn insert_runtime_resource_sample(
             open_fds,
         });
 
+    prune_runtime_resource_samples_internal(
+        ctx,
+        RUNTIME_RESOURCE_SAMPLE_RETENTION_SECONDS,
+        RUNTIME_RESOURCE_SAMPLE_PRUNE_BATCH_SIZE,
+    );
+
     Ok(())
+}
+
+#[reducer]
+pub fn prune_runtime_resource_samples(
+    ctx: &ReducerContext,
+    schedule: RuntimeResourceSamplePruneSchedule,
+) -> Result<(), String> {
+    prune_runtime_resource_samples_internal(
+        ctx,
+        schedule.retention_seconds,
+        schedule.prune_batch_size as usize,
+    );
+    schedule_next_runtime_resource_sample_prune(
+        ctx,
+        schedule.retention_seconds,
+        schedule.prune_batch_size,
+    );
+    Ok(())
+}
+
+pub(crate) fn schedule_next_runtime_resource_sample_prune(
+    ctx: &ReducerContext,
+    retention_seconds: u64,
+    prune_batch_size: u32,
+) {
+    let interval = TimeDuration::from_micros(
+        i64::try_from(RUNTIME_RESOURCE_SAMPLE_ROLLUP_INTERVAL_SECONDS)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000),
+    );
+
+    ctx.db
+        .runtime_resource_sample_prune_schedule()
+        .insert(RuntimeResourceSamplePruneSchedule {
+            scheduled_id: 0,
+            scheduled_at: interval.into(),
+            retention_seconds,
+            prune_batch_size,
+        });
+}
+
+fn prune_runtime_resource_samples_internal(
+    ctx: &ReducerContext,
+    retention_seconds: u64,
+    prune_batch_size: usize,
+) {
+    let retention_micros = i128::from(retention_seconds).saturating_mul(1_000_000);
+    let cutoff_micros =
+        i128::from(ctx.timestamp.to_micros_since_unix_epoch()).saturating_sub(retention_micros);
+
+    let stale_ids: Vec<u64> = ctx
+        .db
+        .runtime_resource_sample()
+        .iter()
+        .filter_map(|sample| {
+            let sampled_at = i128::from(sample.sampled_at.to_micros_since_unix_epoch());
+            if sampled_at < cutoff_micros {
+                Some(sample.id)
+            } else {
+                None
+            }
+        })
+        .take(prune_batch_size)
+        .collect();
+
+    for id in stale_ids {
+        ctx.db.runtime_resource_sample().id().delete(id);
+    }
 }
 
 fn ensure_registered_runtime(

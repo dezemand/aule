@@ -1,9 +1,9 @@
 //! Task lifecycle reducers: create, assign, start, complete, fail.
 
-use spacetimedb::{ReducerContext, Table, reducer};
+use spacetimedb::{reducer, ReducerContext, Table};
 
 use crate::tables::{
-    AgentRuntime, AgentTask, RuntimeStatus, TaskStatus, agent_runtime, agent_task, agent_type,
+    agent_runtime, agent_task, agent_type, AgentRuntime, AgentTask, RuntimeStatus, TaskStatus,
 };
 
 /// Create a new task. Anyone can create tasks.
@@ -42,8 +42,18 @@ pub fn create_task(
     Ok(())
 }
 
-/// Assign a pending task to an idle runtime.
-/// The runtime must be registered and idle, and must match the task's agent type.
+/// assign_task assigns a task to a specific runtime identity.
+///
+/// Preconditions enforced here:
+/// - the task exists and is `Pending`
+/// - the runtime exists and is currently `Idle`
+///
+/// Guarantees on success:
+/// - task status becomes `Assigned` and `assigned_runtime` is set
+/// - runtime status becomes `Busy`
+///
+/// This reducer does not perform agent-type compatibility checks; selection
+/// policy is expected to happen before calling `assign_task`.
 #[reducer]
 pub fn assign_task(
     ctx: &ReducerContext,
