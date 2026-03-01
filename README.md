@@ -29,10 +29,48 @@ docs/           Documentation
 
 - [Rust](https://rustup.rs/) (stable)
 - [Bun](https://bun.sh/)
+- [just](https://github.com/casey/just)
+- [SpacetimeDB CLI](https://spacetimedb.com/docs)
+
+## Environment
+
+This repo uses root-level environment variables for local SpacetimeDB workflows.
+
+1. Copy the template:
+
+```sh
+cp .env.template .env
+```
+
+2. Adjust values in `.env` as needed:
+
+```env
+SPACETIMEDB_URI=http://localhost:3000
+SPACETIMEDB_DB_NAME=aule
+```
+
+`just` loads `.env` automatically. Keep `.env` private; commit only `.env.template`.
 
 ## Getting Started
 
-### Rust
+### Task runner (recommended)
+
+```sh
+just setup
+just db
+just publish
+just generate
+just dev
+```
+
+Publish options:
+
+```sh
+# Publish and delete existing SpacetimeDB data first
+just publish -- --delete-data
+```
+
+### Rust workspace
 
 ```sh
 cargo build
@@ -44,5 +82,5 @@ cargo test
 ```sh
 cd app
 bun install
-bun run index.ts
+bun run dev
 ```

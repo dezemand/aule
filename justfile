@@ -1,7 +1,10 @@
 # Aule — project task runner
 # Run `just` to see all available recipes.
 
-set dotenv-load := false
+set dotenv-load := true
+
+spacetimedb_uri := env_var_or_default("SPACETIMEDB_URI", "http://localhost:3000")
+spacetimedb_db_name := env_var_or_default("SPACETIMEDB_DB_NAME", "aule")
 
 # Default recipe: list all available recipes
 default:
@@ -33,8 +36,8 @@ generate: build-module
     spacetime generate --lang rust --out-dir packages/aule-spacetimedb-client/src/module_bindings --module-path packages/aule-spacetimedb
 
 # Publish the module to a local SpacetimeDB instance
-publish: build-module
-    spacetime publish --server http://localhost:3000 aule -p packages/aule-spacetimedb
+publish publish_arg='': build-module
+    spacetime publish --server {{spacetimedb_uri}} {{spacetimedb_db_name}} -p packages/aule-spacetimedb {{publish_arg}}
 
 # --- Rust workspace ---
 
