@@ -1,9 +1,9 @@
 //! Task lifecycle reducers: create, assign, start, complete, fail.
 
-use spacetimedb::{reducer, ReducerContext, Table};
+use spacetimedb::{ReducerContext, Table, reducer};
 
 use crate::tables::{
-    agent_runtime, agent_task, agent_type, AgentRuntime, AgentTask, RuntimeStatus, TaskStatus,
+    AgentRuntime, AgentTask, RuntimeStatus, TaskStatus, agent_runtime, agent_task, agent_type,
 };
 
 /// Create a new task. Anyone can create tasks.
@@ -75,13 +75,6 @@ pub fn assign_task(
         return Err(format!(
             "Runtime is {:?}, can only assign to Idle runtimes",
             runtime.status
-        ));
-    }
-
-    if runtime.agent_type_id != task.agent_type_id {
-        return Err(format!(
-            "Runtime agent type {} does not match task agent type {}",
-            runtime.agent_type_id, task.agent_type_id
         ));
     }
 

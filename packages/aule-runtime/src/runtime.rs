@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    env, fs,
     sync::atomic::{AtomicU64, Ordering},
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -30,10 +31,45 @@ enum TaskExecutionReport {
     Failed { task_id: u64, error: String },
 }
 
+struct RuntimeProfilePayload {
+    runtime_instance_id: String,
+    runtime_name: String,
+    runtime_version: String,
+    git_sha: Option<String>,
+    hostname: Option<String>,
+    os: String,
+    arch: String,
+}
+
+struct RuntimePlatformInfoPayload {
+    environment: RuntimeEnvironment,
+    process_id: Option<u32>,
+    container_id: Option<String>,
+    image: Option<String>,
+    image_digest: Option<String>,
+    cluster: Option<String>,
+    namespace: Option<String>,
+    pod_name: Option<String>,
+    pod_uid: Option<String>,
+    node_name: Option<String>,
+    workload_kind: Option<String>,
+    workload_name: Option<String>,
+    container_name: Option<String>,
+    restart_count: Option<u32>,
+}
+
+struct RuntimeResourceSamplePayload {
+    cpu_millicores: Option<u32>,
+    memory_rss_bytes: u64,
+    memory_working_set_bytes: Option<u64>,
+    threads: Option<u32>,
+    open_fds: Option<u32>,
+}
+
 pub fn run(config: RuntimeConfig) -> Result<()> {
     info!(
-        "Starting runtime '{}' (agent_type_id={}, agent_version={})",
-        config.runtime_name, config.agent_type_id, config.agent_version
+        "Starting runtime '{}' (agent_version={})",
+        config.runtime_name, config.agent_version
     );
 
     let (task_tx, task_rx) = mpsc::channel::<u64>();
@@ -127,6 +163,12 @@ fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>
     let mut in_flight_tasks = HashSet::<u64>::new();
     let mut registered = false;
     let mut last_heartbeat = Instant::now();
+    let mut last_resource_sample = Instant::now();
+    let start_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let runtime_instance_id = format!("{}-{}", std::process::id(), start_millis);
 
     loop {
         while let Ok(report) = task_result_rx.try_recv() {
@@ -146,19 +188,18 @@ fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>
         }
 
         if !registered && ctx.try_identity().is_some() {
-            match ctx
-                .reducers
-                .register_runtime(config.runtime_name.clone(), config.agent_type_id)
-            {
+            match ctx.reducers.register_runtime(config.runtime_name.clone()) {
                 Ok(_) => {
                     info!("Runtime registered as '{}'.", config.runtime_name);
                     registered = true;
+                    upsert_runtime_metadata(ctx, config, &runtime_instance_id);
                 }
                 Err(err) => {
                     let msg = err.to_string();
                     if msg.contains("already registered") {
                         info!("Runtime already registered, continuing.");
                         registered = true;
+                        upsert_runtime_metadata(ctx, config, &runtime_instance_id);
                     } else {
                         warn!("register_runtime failed (will retry): {msg}");
                     }
@@ -171,6 +212,11 @@ fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>
                 warn!("heartbeat failed: {err}");
             }
             last_heartbeat = Instant::now();
+        }
+
+        if registered && last_resource_sample.elapsed() >= config.resource_sample_interval {
+            insert_runtime_resource_sample(ctx, collect_runtime_resource_sample());
+            last_resource_sample = Instant::now();
         }
 
         match task_rx.recv_timeout(Duration::from_millis(250)) {
@@ -216,6 +262,235 @@ fn event_loop(ctx: &DbConnection, config: &RuntimeConfig, task_rx: Receiver<u64>
             }
         }
     }
+}
+
+fn upsert_runtime_metadata(ctx: &DbConnection, config: &RuntimeConfig, runtime_instance_id: &str) {
+    let profile = collect_runtime_profile(config, runtime_instance_id);
+    if let Err(err) = ctx.reducers.upsert_runtime_profile(
+        profile.runtime_instance_id,
+        profile.runtime_name,
+        profile.runtime_version,
+        profile.git_sha,
+        profile.hostname,
+        profile.os,
+        profile.arch,
+    ) {
+        warn!("upsert_runtime_profile failed: {err}");
+    }
+
+    let platform = collect_runtime_platform_info();
+    if let Err(err) = ctx.reducers.upsert_runtime_platform_info(
+        platform.environment,
+        platform.process_id,
+        platform.container_id,
+        platform.image,
+        platform.image_digest,
+        platform.cluster,
+        platform.namespace,
+        platform.pod_name,
+        platform.pod_uid,
+        platform.node_name,
+        platform.workload_kind,
+        platform.workload_name,
+        platform.container_name,
+        platform.restart_count,
+    ) {
+        warn!("upsert_runtime_platform_info failed: {err}");
+    }
+}
+
+fn insert_runtime_resource_sample(ctx: &DbConnection, sample: RuntimeResourceSamplePayload) {
+    if let Err(err) = ctx.reducers.insert_runtime_resource_sample(
+        sample.cpu_millicores,
+        sample.memory_rss_bytes,
+        sample.memory_working_set_bytes,
+        sample.threads,
+        sample.open_fds,
+    ) {
+        warn!("insert_runtime_resource_sample failed: {err}");
+    }
+}
+
+fn collect_runtime_profile(
+    config: &RuntimeConfig,
+    runtime_instance_id: &str,
+) -> RuntimeProfilePayload {
+    RuntimeProfilePayload {
+        runtime_instance_id: runtime_instance_id.to_string(),
+        runtime_name: config.runtime_name.clone(),
+        runtime_version: env!("CARGO_PKG_VERSION").to_string(),
+        git_sha: env::var("AULE_GIT_SHA").ok().map(|v| v.trim().to_string()),
+        hostname: read_hostname(),
+        os: env::consts::OS.to_string(),
+        arch: env::consts::ARCH.to_string(),
+    }
+}
+
+fn collect_runtime_platform_info() -> RuntimePlatformInfoPayload {
+    let environment = detect_runtime_environment();
+    RuntimePlatformInfoPayload {
+        environment,
+        process_id: Some(std::process::id()),
+        container_id: read_container_id(),
+        image: env_opt("AULE_RUNTIME_IMAGE"),
+        image_digest: env_opt("AULE_RUNTIME_IMAGE_DIGEST"),
+        cluster: env_opt("AULE_K8S_CLUSTER"),
+        namespace: env_opt("POD_NAMESPACE").or_else(|| env_opt("K8S_NAMESPACE")),
+        pod_name: env_opt("POD_NAME"),
+        pod_uid: env_opt("POD_UID"),
+        node_name: env_opt("NODE_NAME"),
+        workload_kind: env_opt("AULE_WORKLOAD_KIND"),
+        workload_name: env_opt("AULE_WORKLOAD_NAME"),
+        container_name: env_opt("CONTAINER_NAME"),
+        restart_count: env_opt("RESTART_COUNT").and_then(|v| v.parse::<u32>().ok()),
+    }
+}
+
+fn collect_runtime_resource_sample() -> RuntimeResourceSamplePayload {
+    RuntimeResourceSamplePayload {
+        cpu_millicores: None,
+        memory_rss_bytes: read_memory_rss_bytes().unwrap_or(0),
+        memory_working_set_bytes: None,
+        threads: read_thread_count(),
+        open_fds: read_open_fd_count(),
+    }
+}
+
+fn detect_runtime_environment() -> RuntimeEnvironment {
+    if env::var("KUBERNETES_SERVICE_HOST").is_ok()
+        || env::var("POD_NAME").is_ok()
+        || env::var("POD_NAMESPACE").is_ok()
+    {
+        return RuntimeEnvironment::K8S;
+    }
+
+    if fs::metadata("/.dockerenv").is_ok() {
+        return RuntimeEnvironment::Docker;
+    }
+
+    if let Ok(cgroup) = fs::read_to_string("/proc/self/cgroup") {
+        if cgroup.contains("docker") || cgroup.contains("containerd") || cgroup.contains("kubepods")
+        {
+            return RuntimeEnvironment::Docker;
+        }
+    }
+
+    RuntimeEnvironment::Local
+}
+
+fn read_hostname() -> Option<String> {
+    if let Some(hostname) = env_opt("HOSTNAME") {
+        return Some(hostname);
+    }
+
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 256];
+        let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+        if rc == 0 {
+            let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+            let hostname = String::from_utf8_lossy(&buf[..len]).trim().to_string();
+            if !hostname.is_empty() {
+                return Some(hostname);
+            }
+        }
+    }
+
+    None
+}
+
+fn read_container_id() -> Option<String> {
+    if let Ok(cgroup) = fs::read_to_string("/proc/self/cgroup") {
+        for line in cgroup.lines() {
+            if let Some(candidate) = line
+                .split('/')
+                .next_back()
+                .map(str::trim)
+                .filter(|s| s.len() >= 12)
+            {
+                if candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn env_opt(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn read_memory_rss_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let kb = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<u64>().ok())?;
+                return Some(kb.saturating_mul(1024));
+            }
+        }
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if rc == 0 {
+            let usage = unsafe { usage.assume_init() };
+            let rss = usage.ru_maxrss;
+            if rss > 0 {
+                // On macOS, ru_maxrss is already reported in bytes.
+                return Some(rss as u64);
+            }
+        }
+        None
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "macos")))]
+    {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if rc == 0 {
+            let usage = unsafe { usage.assume_init() };
+            let rss = usage.ru_maxrss;
+            if rss > 0 {
+                return Some((rss as u64).saturating_mul(1024));
+            }
+        }
+        None
+    }
+}
+
+fn read_thread_count() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("Threads:") {
+                return rest.trim().parse::<u32>().ok();
+            }
+        }
+    }
+    None
+}
+
+fn read_open_fd_count() -> Option<u32> {
+    for dir in ["/proc/self/fd", "/dev/fd"] {
+        if let Ok(entries) = fs::read_dir(dir) {
+            let count = entries.count();
+            return u32::try_from(count).ok();
+        }
+    }
+    None
 }
 
 fn prepare_task_execution(

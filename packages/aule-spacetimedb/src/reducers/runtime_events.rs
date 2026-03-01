@@ -70,17 +70,21 @@ pub fn update_runtime_event(
 
     ensure_runtime_can_write_task_logs(ctx, event.task_id, sender)?;
 
+    let event_id = event.id.clone();
+    let task_id = event.task_id;
+    let event_type = event.event_type.clone();
+
     ctx.db.runtime_event().id().update(RuntimeEvent {
         content,
         updated_at: ctx.timestamp,
-        ..event.clone()
+        ..event
     });
 
     log::info!(
         "Runtime event updated: id={}, task_id={}, event_type={:?}",
-        event.id,
-        event.task_id,
-        event.event_type
+        event_id,
+        task_id,
+        event_type
     );
 
     Ok(())

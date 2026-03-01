@@ -90,6 +90,15 @@ export function SpacetimeProvider({ children }: { children: ReactNode }) {
         ctx.db.runtime_event.onInsert(() => bump());
         ctx.db.runtime_event.onUpdate(() => bump());
         ctx.db.runtime_event.onDelete(() => bump());
+        ctx.db.runtime_profile.onInsert(() => bump());
+        ctx.db.runtime_profile.onUpdate(() => bump());
+        ctx.db.runtime_profile.onDelete(() => bump());
+        ctx.db.runtime_platform_info.onInsert(() => bump());
+        ctx.db.runtime_platform_info.onUpdate(() => bump());
+        ctx.db.runtime_platform_info.onDelete(() => bump());
+        ctx.db.runtime_resource_sample.onInsert(() => bump());
+        ctx.db.runtime_resource_sample.onUpdate(() => bump());
+        ctx.db.runtime_resource_sample.onDelete(() => bump());
 
         // Subscribe to all tables
         ctx
@@ -110,6 +119,9 @@ export function SpacetimeProvider({ children }: { children: ReactNode }) {
             "SELECT * FROM agent_type_version",
             "SELECT * FROM observation",
             "SELECT * FROM runtime_event",
+            "SELECT * FROM runtime_profile",
+            "SELECT * FROM runtime_platform_info",
+            "SELECT * FROM runtime_resource_sample",
           ]);
       })
       .onConnectError((_ctx: ErrorContext) => {

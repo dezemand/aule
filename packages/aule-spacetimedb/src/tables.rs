@@ -3,6 +3,7 @@
 //! Tables are organized by domain:
 //! - Identity: agent_runtimes, agent_tasks
 //! - Agent Types: agent_types, agent_type_versions
+//! - Runtime metadata: runtime_profiles, runtime_platform_info, runtime_resource_sample
 //! - Observations: observations, runtime_events
 
 use spacetimedb::{Identity, SpacetimeType, Timestamp, table};
@@ -20,11 +21,66 @@ pub struct AgentRuntime {
     /// Human-readable name for this runtime instance (e.g. "builder-01").
     #[unique]
     pub name: String,
-    /// The agent type this runtime is configured to run.
-    pub agent_type_id: u64,
     pub status: RuntimeStatus,
     pub last_heartbeat: Timestamp,
     pub registered_at: Timestamp,
+}
+
+/// Stable runtime metadata that changes infrequently.
+#[table(accessor = runtime_profile, public)]
+pub struct RuntimeProfile {
+    #[primary_key]
+    pub runtime_identity: Identity,
+    /// Unique ID for this process instance.
+    pub runtime_instance_id: String,
+    pub runtime_name: String,
+    pub runtime_version: String,
+    pub git_sha: Option<String>,
+    pub hostname: Option<String>,
+    pub os: String,
+    pub arch: String,
+    pub started_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+/// Platform/deployment metadata for a runtime.
+///
+/// This is intentionally environment-agnostic: local and Docker runtimes can
+/// populate generic fields while K8s runtimes additionally populate pod fields.
+#[table(accessor = runtime_platform_info, public)]
+pub struct RuntimePlatformInfo {
+    #[primary_key]
+    pub runtime_identity: Identity,
+    pub environment: RuntimeEnvironment,
+    pub process_id: Option<u32>,
+    pub container_id: Option<String>,
+    pub image: Option<String>,
+    pub image_digest: Option<String>,
+    pub cluster: Option<String>,
+    pub namespace: Option<String>,
+    pub pod_name: Option<String>,
+    pub pod_uid: Option<String>,
+    pub node_name: Option<String>,
+    pub workload_kind: Option<String>,
+    pub workload_name: Option<String>,
+    pub container_name: Option<String>,
+    pub restart_count: Option<u32>,
+    pub updated_at: Timestamp,
+}
+
+/// High-frequency resource usage samples for a runtime.
+#[table(accessor = runtime_resource_sample, public)]
+pub struct RuntimeResourceSample {
+    #[auto_inc]
+    #[primary_key]
+    pub id: u64,
+    pub runtime_identity: Identity,
+    pub sampled_at: Timestamp,
+    pub cpu_millicores: Option<u32>,
+    pub memory_rss_bytes: u64,
+    pub memory_working_set_bytes: Option<u64>,
+    pub threads: Option<u32>,
+    pub open_fds: Option<u32>,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -37,6 +93,14 @@ pub enum RuntimeStatus {
     Draining,
     /// Disconnected or unresponsive.
     Offline,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum RuntimeEnvironment {
+    Local,
+    Docker,
+    K8S,
+    Unknown,
 }
 
 /// A task that can be assigned to an agent runtime.

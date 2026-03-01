@@ -43,6 +43,7 @@ export function AgentTypesPage() {
   const allTypes = agentTypes ?? [];
   const allVersions = versions ?? [];
   const allRuntimes = runtimes ?? [];
+  const onlineRuntimeCount = allRuntimes.filter((r) => r.status.tag !== "Offline").length;
 
   function versionsForType(typeId: bigint) {
     return allVersions
@@ -53,22 +54,21 @@ export function AgentTypesPage() {
       );
   }
 
-  function runtimesForType(typeId: bigint) {
-    return allRuntimes.filter(
-      (r) => r.agentTypeId === typeId && r.status.tag !== "Offline"
-    );
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-gray-100">Agent Types</h1>
-        <button
-          onClick={() => setShowCreateType(!showCreateType)}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-500"
-        >
-          {showCreateType ? "Cancel" : "New Agent Type"}
-        </button>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">
+            {onlineRuntimeCount} runtime{onlineRuntimeCount !== 1 ? "s" : ""} online
+          </span>
+          <button
+            onClick={() => setShowCreateType(!showCreateType)}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-500"
+          >
+            {showCreateType ? "Cancel" : "New Agent Type"}
+          </button>
+        </div>
       </div>
 
       {/* Create type form */}
@@ -86,7 +86,6 @@ export function AgentTypesPage() {
         <div className="space-y-4">
           {allTypes.map((at) => {
             const typeVersions = versionsForType(at.id);
-            const typeRuntimes = runtimesForType(at.id);
 
             return (
               <div
@@ -101,10 +100,6 @@ export function AgentTypesPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-gray-500">
-                    <span>
-                      {typeRuntimes.length} runtime
-                      {typeRuntimes.length !== 1 ? "s" : ""} online
-                    </span>
                     <span>
                       {typeVersions.length} version
                       {typeVersions.length !== 1 ? "s" : ""}
