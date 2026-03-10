@@ -112,7 +112,7 @@ The runtime will connect to SpacetimeDB, register, and idle waiting for task ass
 
 ## 4. Frontend
 
-The web dashboard connects to SpacetimeDB via WebSocket and shows real-time agent/task/observation state.
+The web dashboard connects to SpacetimeDB via WebSocket and shows real-time agent/task/observation state. For the full development guide (project structure, conventions, templates), see [frontend.md](./frontend.md).
 
 ```sh
 just dev

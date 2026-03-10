@@ -1,50 +1,62 @@
-@import "tailwindcss";
-@source "../node_modules/streamdown/dist/*.js";
+/* Mantine core styles are imported in main.tsx */
 
-body {
-  @apply bg-gray-950 text-gray-100 antialiased;
-}
+/* ── Markdown (streamdown) typography ─────────────────────────────── */
 
 .markdown {
-  @apply text-gray-200;
+  color: var(--mantine-color-gray-3);
 }
 
 .markdown :where(h1, h2, h3, h4) {
-  @apply mt-4 font-semibold text-gray-100;
+  margin-top: 1rem;
+  font-weight: 600;
+  color: var(--mantine-color-gray-1);
 }
 
 .markdown :where(p, ul, ol, blockquote, pre, table) {
-  @apply mt-2;
+  margin-top: 0.5rem;
 }
 
 .markdown :where(ul, ol) {
-  @apply ml-5;
+  margin-left: 1.25rem;
 }
 
 .markdown :where(ul) {
-  @apply list-disc;
+  list-style: disc;
 }
 
 .markdown :where(ol) {
-  @apply list-decimal;
+  list-style: decimal;
 }
 
 .markdown :where(a) {
-  @apply text-blue-300 underline decoration-blue-500/50 underline-offset-2;
+  color: var(--mantine-color-blue-4);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .markdown :where(code) {
-  @apply rounded bg-gray-800/80 px-1 py-0.5 text-[0.85em] text-gray-100;
+  border-radius: var(--mantine-radius-xs);
+  background: var(--mantine-color-dark-6);
+  padding: 0.125rem 0.25rem;
+  font-size: 0.85em;
+  color: var(--mantine-color-gray-1);
 }
 
 .markdown :where(pre) {
-  @apply overflow-x-auto rounded-md border border-gray-800 bg-gray-950/80 p-3;
+  overflow-x: auto;
+  border-radius: var(--mantine-radius-sm);
+  border: 1px solid var(--mantine-color-dark-4);
+  background: var(--mantine-color-dark-8);
+  padding: 0.75rem;
 }
 
 .markdown :where(pre code) {
-  @apply bg-transparent p-0;
+  background: transparent;
+  padding: 0;
 }
 
 .markdown :where(blockquote) {
-  @apply border-l-2 border-gray-700 pl-3 text-gray-300;
+  border-left: 2px solid var(--mantine-color-dark-4);
+  padding-left: 0.75rem;
+  color: var(--mantine-color-gray-5);
 }

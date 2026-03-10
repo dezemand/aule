@@ -16,7 +16,6 @@ Default to using Bun instead of Node.js.
 
 ## APIs
 
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
 - `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
 - `Bun.redis` for Redis. Don't use `ioredis`.
 - `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
@@ -38,43 +37,13 @@ test("hello world", () => {
 
 ## Frontend
 
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
+The `app/` frontend uses **Vite** as dev server and bundler (not Bun.serve). Bun is used as the package manager and test runner only.
 
-Server:
-
-```ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  websocket: {
-    open: (ws) => { ws.send("Hello, world!"); },
-    message: (ws, message) => { ws.send(message); },
-    close: (ws) => {},
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
+```bash
+cd app
+bun install       # Install dependencies
+bun run dev       # Start Vite dev server with HMR
+bun run build     # Type-check + production build
+bun run typecheck # Type-check only
+bun test          # Run tests
 ```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
