@@ -8,7 +8,7 @@ The full development guide is at `docs/frontend.md`. This skill contains the rul
 
 ## Project Structure
 
-```
+```text
 app/src/
 ├── main.tsx                     # Bootstrap: providers, router, mount
 ├── index.css                    # Global styles (resets, typography, markdown)
@@ -39,7 +39,7 @@ app/src/
 
 ### Feature Module Layout
 
-```
+```text
 features/<name>/
 ├── <Name>Page.tsx          # Page component + co-located route definition
 ├── components/             # Feature-specific components
@@ -252,7 +252,7 @@ function ExamplePage() {
       ) : (
         <Stack gap="sm">
           {(tasks ?? []).map((task) => (
-            <Text key={Number(task.id)}>{task.title}</Text>
+            <Text key={task.id.toString()}>{task.title}</Text>
           ))}
         </Stack>
       )}

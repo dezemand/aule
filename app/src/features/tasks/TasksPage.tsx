@@ -1,5 +1,5 @@
 import { createRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Group, Skeleton, Stack, Text, Title } from "@mantine/core";
 import { useSpacetimeDB } from "spacetimedb/react";
 
@@ -68,6 +68,12 @@ function TasksPage() {
 
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [showCreate, setShowCreate] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   if (!sub.subscribed) {
     return (
@@ -103,11 +109,8 @@ function TasksPage() {
     (a, b) => b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime(),
   );
 
-  const agentTypeMap = new Map(
-    (agentTypes ?? []).map((agentType) => [
-      Number(agentType.id),
-      agentType.name,
-    ]),
+  const agentTypeMap = new Map<bigint, string>(
+    (agentTypes ?? []).map((agentType) => [agentType.id, agentType.name]),
   );
   const runtimeNameByIdentity = new Map(
     (runtimes ?? []).map((runtime) => [
@@ -175,10 +178,10 @@ function TasksPage() {
         <Stack gap="sm">
           {sorted.map((task) => (
             <TaskCard
-              key={Number(task.id)}
+              key={task.id.toString()}
               task={task}
               agentTypeName={
-                agentTypeMap.get(Number(task.agentTypeId)) ?? "Unknown"
+                agentTypeMap.get(task.agentTypeId) ?? "Unknown"
               }
               runtimeName={
                 task.assignedRuntime
@@ -191,7 +194,7 @@ function TasksPage() {
               observations={getTaskObservations(task.id)}
               runtimes={runtimes ?? []}
               conn={conn}
-              now={Date.now()}
+              now={now}
             />
           ))}
         </Stack>

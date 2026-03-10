@@ -14,6 +14,7 @@ export type TimelineItem =
       action: string;
       shellOutput: string | null;
       result: string;
+      rawResult: string | null;
       timestamp: string;
     };
 
@@ -21,7 +22,7 @@ type TurnBucket = {
   turn: number;
   toolCall: RuntimeEvent | null;
   toolResults: RuntimeEvent[];
-  shellOutput: RuntimeEvent | null;
+  shellOutputs: RuntimeEvent[];
 };
 
 export function parseKeyValue(content: string): Record<string, string> {
@@ -106,7 +107,7 @@ export function buildTimeline(events: RuntimeEvent[]): TimelineItem[] {
     const turn = Number(event.turn);
     let bucket = turnMap.get(turn);
     if (!bucket) {
-      bucket = { turn, toolCall: null, toolResults: [], shellOutput: null };
+      bucket = { turn, toolCall: null, toolResults: [], shellOutputs: [] };
       turnMap.set(turn, bucket);
     }
 
@@ -115,7 +116,7 @@ export function buildTimeline(events: RuntimeEvent[]): TimelineItem[] {
     } else if (tag === "ToolResult") {
       bucket.toolResults.push(event);
     } else if (tag === "ShellOutput") {
-      bucket.shellOutput = event;
+      bucket.shellOutputs.push(event);
     }
   }
 
@@ -142,9 +143,11 @@ export function buildTimeline(events: RuntimeEvent[]): TimelineItem[] {
     });
     const resultParsed = mainResult ? parseKeyValue(mainResult.content) : {};
 
-    const shellContent = bucket.shellOutput?.content ?? null;
+    const shellContent = bucket.shellOutputs.length
+      ? bucket.shellOutputs.map((entry) => entry.content).join("")
+      : null;
     const resultSummary = summarizeResult(resultParsed.result);
-    const resultRaw = mainResult?.content ?? "";
+    const resultRaw = mainResult?.content ?? null;
 
     items.push({
       id: bucket.toolCall?.id ?? `turn-${turn}`,
@@ -152,9 +155,10 @@ export function buildTimeline(events: RuntimeEvent[]): TimelineItem[] {
       title: summarizeAction(action),
       action: action ?? "",
       shellOutput: shellContent,
-      result: resultSummary ?? resultRaw,
+      result: resultSummary ?? resultRaw ?? "",
+      rawResult: resultRaw,
       timestamp: (
-        bucket.toolCall ?? mainResult ?? bucket.shellOutput
+        bucket.toolCall ?? mainResult ?? bucket.shellOutputs[0]
       )!.updatedAt
         .toDate()
         .toLocaleTimeString(),

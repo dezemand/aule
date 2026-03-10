@@ -39,7 +39,7 @@ Requires a running SpacetimeDB instance (see [running.md](./running.md)).
 
 ## Project Structure
 
-```
+```text
 app/
 ├── index.html                          # SPA HTML shell (Vite entry point)
 ├── vite.config.ts                      # Vite config (React plugin, @/ alias)
@@ -55,7 +55,7 @@ app/
     │
     ├── config/                          # App-wide configuration
     │   ├── theme.ts                     #   Mantine theme object
-    │   └── routes.ts                    #   Root route + RouteContext type
+    │   └── routes.tsx                   #   Root route + RouteContext type
     │
     ├── lib/                             # Infrastructure libraries
     │   └── subscriptions/               #   SpacetimeDB subscription system
@@ -109,7 +109,7 @@ Use relative imports only for files within the same feature (e.g., `./components
 
 Each feature in `features/` follows this internal layout:
 
-```
+```text
 features/<name>/
 ├── <Name>Page.tsx              # Route-level page component + route definition
 ├── components/                 # Components specific to this feature
@@ -526,7 +526,7 @@ function ExamplePage() {
       ) : (
         <Stack gap="sm">
           {(tasks ?? []).map((task) => (
-            <Text key={Number(task.id)}>{task.title}</Text>
+            <Text key={task.id.toString()}>{task.title}</Text>
           ))}
         </Stack>
       )}
@@ -572,7 +572,7 @@ function ExampleDetailsPage() {
   const sub = useSubscription(SUBSCRIPTION_KEY, EXAMPLE_DETAILS_SUBSCRIPTION);
   const item = useQuery(SUBSCRIPTION_KEY, (db) => {
     for (const row of db.agent_task.iter()) {
-      if (Number(row.id) === Number(exampleId)) return row;
+      if (row.id === BigInt(exampleId)) return row;
     }
     return undefined;
   });

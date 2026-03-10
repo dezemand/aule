@@ -139,8 +139,8 @@ function TaskDetailsPage() {
   }
 
   const task = (tasks ?? []).find((c) => c.id === parsedTaskId);
-  const agentTypeMap = new Map(
-    (agentTypes ?? []).map((a) => [Number(a.id), a.name]),
+  const agentTypeMap = new Map<bigint, string>(
+    (agentTypes ?? []).map((a) => [a.id, a.name]),
   );
   const runtimeNameMap = new Map(
     (runtimes ?? []).map((r) => [r.identity.toHexString(), r.name]),
@@ -199,7 +199,7 @@ function TaskDetailsPage() {
     : null;
 
   const agentTypeName =
-    agentTypeMap.get(Number(task.agentTypeId)) ?? "Unknown";
+    agentTypeMap.get(task.agentTypeId) ?? "Unknown";
 
   return (
     <Stack gap={0} h="100%">
@@ -214,7 +214,7 @@ function TaskDetailsPage() {
 
       <Box pb="md">
         <Stack gap="sm">
-          <TaskBreadcrumbs taskLabel={`#${Number(task.id)}`} />
+          <TaskBreadcrumbs taskLabel={`#${task.id.toString()}`} />
 
           <Group gap="sm">
             <Title order={4}>{task.title}</Title>
@@ -231,7 +231,7 @@ function TaskDetailsPage() {
               </Text>
             )}
             <Text size="xs" c="dimmed" ml="auto">
-              #{Number(task.id)}
+              #{task.id.toString()}
             </Text>
           </Group>
         </Stack>

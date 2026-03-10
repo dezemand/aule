@@ -1,4 +1,4 @@
-import { Box, Group, Paper, Text } from "@mantine/core";
+import { Box, Code, Group, Paper, Text } from "@mantine/core";
 
 import { Markdown } from "@/shared/components/Markdown/Markdown";
 
@@ -64,6 +64,21 @@ export function TimelineEntry({ item }: TimelineEntryProps) {
             {item.timestamp}
           </Text>
         </Group>
+        {item.action && (
+          <Code
+            block
+            mt={4}
+            fz="xs"
+            c="dimmed"
+            style={{
+              maxHeight: 120,
+              overflow: "auto",
+              whiteSpace: "pre",
+            }}
+          >
+            {item.action}
+          </Code>
+        )}
         {item.result && (
           <Text fz="xs" c="dimmed" mt={4}>
             {item.result}

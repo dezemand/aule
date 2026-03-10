@@ -8,21 +8,23 @@ type ShellOutputDetailsProps = {
 };
 
 export function ShellOutputDetails({ output }: ShellOutputDetailsProps) {
-  const [opened, setOpened] = useState(false);
   const lines = countLines(output);
+  const collapsible = lines > 10;
+  const [opened, setOpened] = useState(!collapsible);
 
   return (
     <Box mt={6}>
-      <UnstyledButton
-        onClick={() => setOpened((v) => !v)}
-        fz={11}
-        c="dimmed"
-        style={{ cursor: "pointer" }}
-      >
-        {opened ? "Hide" : "Show"} shell output
-        {lines > 10 ? ` (${lines} lines)` : ""}
-      </UnstyledButton>
-      <Collapse in={opened}>
+      {collapsible && (
+        <UnstyledButton
+          onClick={() => setOpened((v) => !v)}
+          fz={11}
+          c="dimmed"
+          style={{ cursor: "pointer" }}
+        >
+          {opened ? "Hide" : "Show"} shell output ({lines} lines)
+        </UnstyledButton>
+      )}
+      <Collapse in={collapsible ? opened : true}>
         <Code
           block
           mt={6}
@@ -31,8 +33,7 @@ export function ShellOutputDetails({ output }: ShellOutputDetailsProps) {
           style={{
             maxHeight: 240,
             overflow: "auto",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
+            whiteSpace: "pre",
           }}
         >
           {output}
