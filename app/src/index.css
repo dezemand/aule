@@ -1,5 +1,62 @@
-@import "tailwindcss";
+/* Mantine core styles are imported in main.tsx */
 
-body {
-  @apply bg-gray-950 text-gray-100 antialiased;
+/* ── Markdown (streamdown) typography ─────────────────────────────── */
+
+.markdown {
+  color: var(--mantine-color-gray-3);
+}
+
+.markdown :where(h1, h2, h3, h4) {
+  margin-top: 1rem;
+  font-weight: 600;
+  color: var(--mantine-color-gray-1);
+}
+
+.markdown :where(p, ul, ol, blockquote, pre, table) {
+  margin-top: 0.5rem;
+}
+
+.markdown :where(ul, ol) {
+  margin-left: 1.25rem;
+}
+
+.markdown :where(ul) {
+  list-style: disc;
+}
+
+.markdown :where(ol) {
+  list-style: decimal;
+}
+
+.markdown :where(a) {
+  color: var(--mantine-color-blue-4);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown :where(code) {
+  border-radius: var(--mantine-radius-xs);
+  background: var(--mantine-color-dark-6);
+  padding: 0.125rem 0.25rem;
+  font-size: 0.85em;
+  color: var(--mantine-color-gray-1);
+}
+
+.markdown :where(pre) {
+  overflow-x: auto;
+  border-radius: var(--mantine-radius-sm);
+  border: 1px solid var(--mantine-color-dark-4);
+  background: var(--mantine-color-dark-8);
+  padding: 0.75rem;
+}
+
+.markdown :where(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown :where(blockquote) {
+  border-left: 2px solid var(--mantine-color-dark-4);
+  padding-left: 0.75rem;
+  color: var(--mantine-color-gray-5);
 }
