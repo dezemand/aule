@@ -11,19 +11,29 @@ The full development guide is at `docs/frontend.md`. This skill contains the rul
 ```
 app/src/
 ├── main.tsx                     # Bootstrap: providers, router, mount
-├── config/                      # theme.ts, routes.ts (root + section layout routes)
+├── index.css                    # Global styles (resets, typography, markdown)
+├── global.d.ts                  # Ambient type declarations (CSS modules)
+├── config/                      # App-wide configuration
+│   ├── theme.ts                 #   Mantine theme object
+│   ├── routes.tsx               #   Root route, section layouts, RouteContext type
+│   └── spacetime.ts             #   SpacetimeDB connection builder
+├── lib/                         # Infrastructure libraries
+│   └── subscriptions/           #   SpacetimeDB subscription system
+│       ├── subscription.ts      #     SubscriptionDef type
+│       ├── subscriptionManager.ts #   Singleton manager (ensure/retain/release)
+│       ├── tableEventBus.ts     #     Microtask-coalesced event bus
+│       └── hooks/
+│           ├── useSpacetimeConnection.ts  # Zustand store + subscriptionManager singleton
+│           ├── useSubscription.ts         # Subscription lifecycle hook
+│           └── useQuery.ts               # Scoped reactive query hook
 ├── shared/
-│   ├── components/              # Reusable UI components (AppShell/, Markdown/, etc.)
-│   └── utils/                   # Pure utility functions (statusColors.ts, etc.)
+│   ├── components/              # Reusable UI (AppShell/, TopBar/, Markdown/, ConnectionBadge/)
+│   └── utils/                   # Pure utilities (statusColors.ts, formatting.ts, promise.ts)
 ├── features/                    # Feature modules — one per domain
-│   ├── spacetime/               # SpacetimeDB connection, provider, hooks
 │   ├── dashboard/
 │   ├── tasks/
 │   ├── agents/
-│   ├── runtimes/
-│   ├── observations/
-│   ├── approvals/
-│   └── provenance/
+│   └── conversation/
 └── module_bindings/             # AUTO-GENERATED — never edit
 ```
 
@@ -37,21 +47,12 @@ features/<name>/
 └── utils/                  # Feature-specific utilities (optional)
 ```
 
-The `spacetime` feature provides infrastructure rather than pages:
-
-```
-features/spacetime/
-├── SpacetimeProvider.tsx    # React context provider (connection + auth)
-├── useSpacetime.ts          # useSpacetime, useSubscription, useQuery hooks
-└── ConnectionBadge.tsx      # Connection status indicator
-```
-
 ### Where Code Goes
 
 - Page + route definition: `features/<name>/<Name>Page.tsx`
 - Feature-specific component: `features/<name>/components/`
 - Reusable component (2+ features): `shared/components/`
-- SpacetimeDB provider, hooks, connection: `features/spacetime/`
+- SpacetimeDB subscription infrastructure: `lib/subscriptions/`
 - Feature-specific hook: `features/<name>/hooks/`
 - Utility function: `shared/utils/` or `features/<name>/utils/`
 - Config (theme, root route, section layouts): `config/`
@@ -64,7 +65,8 @@ Use `@/` alias (mapped to `src/`) for imports across features or from shared cod
 
 ```tsx
 // ✅ Alias for cross-feature imports
-import { useSpacetime } from "@/features/spacetime/useSpacetime";
+import { useSubscription } from "@/lib/subscriptions/hooks/useSubscription";
+import { useQuery } from "@/lib/subscriptions/hooks/useQuery";
 import { taskStatusColor } from "@/shared/utils/statusColors";
 import { tables } from "@/module_bindings";
 
@@ -72,7 +74,7 @@ import { tables } from "@/module_bindings";
 import { TaskCard } from "./components/TaskCard";
 
 // ❌ Never relative across features
-import { useSpacetime } from "../../features/spacetime/useSpacetime";
+import { useSubscription } from "../../lib/subscriptions/hooks/useSubscription";
 ```
 
 ## Conventions
@@ -82,7 +84,7 @@ import { useSpacetime } from "../../features/spacetime/useSpacetime";
 - **Component names match file names.** `TaskCard.tsx` exports `TaskCard`.
 - **Props as `type`, not `interface`.** Named `<ComponentName>Props`, co-located in the same file.
 - **File naming:** Components=PascalCase, hooks=camelCase with `use` prefix, utils=camelCase, tests=`*.test.tsx`/`*.test.ts`.
-- **Import order:** (1) React/external, (2) `@/config/`, `@/features/spacetime/`, `@/shared/`, (3) other `@/features/`, (4) feature-internal `./`, (5) `@/module_bindings`, (6) types.
+- **Import order:** (1) React/external, (2) `@/config/`, `@/lib/`, `@/shared/`, (3) `@/features/`, (4) feature-internal `./`, (5) `@/module_bindings`, (6) types.
 - **Styling preference:** Mantine props first, CSS Modules second, global CSS never (except `index.css`), inline styles never (except dynamic values).
 - **Minimal comments.** Only comment when code genuinely isn't obvious. Don't use comments as section dividers — if a file needs sections, split it into separate files. Don't narrate the obvious.
 
@@ -145,28 +147,50 @@ Dependency flow: `config/routes` <- `features/*` <- `main.tsx`. No circular impo
 
 ## SpacetimeDB Patterns
 
-SpacetimeDB connection, provider, and hooks live in `features/spacetime/`.
+SpacetimeDB subscription infrastructure lives in `lib/subscriptions/`. It provides three layers:
+
+1. **`SubscriptionManager`** — singleton that manages subscription lifecycle with retain/release and grace TTL. Called from route loaders to preload data.
+2. **`useSubscription(key, def)`** — React hook that retains a subscription for the component's lifetime and returns `{ subscribed, error }`.
+3. **`useQuery(key, selector)`** — React hook that reads from the SpacetimeDB client cache and re-renders when the subscription's tables change.
 
 **Reading data:**
 ```tsx
-import { useQuery, useSubscription } from "@/features/spacetime/useSpacetime";
+import { useSubscription } from "@/lib/subscriptions/hooks/useSubscription";
+import { useQuery } from "@/lib/subscriptions/hooks/useQuery";
 import { tables } from "@/module_bindings";
+import type { SubscriptionDef } from "@/lib/subscriptions/subscription";
 
-const QUERY = [tables.agent_task];
+const SUBSCRIPTION_KEY = "tasks";
 
-const sub = useSubscription(
-  QUERY,
-  useCallback((db) => [db.agent_task], []),
-);
-const tasks = useQuery(sub, (db) => Array.from(db.agent_task.iter()));
+const TASKS_SUBSCRIPTION: SubscriptionDef = {
+  query: [tables.agent_task],
+  tables: ["agent_task"],
+};
+
+// In route loader:
+export const tasksRoute = createRoute({
+  loader: async ({ context: { spacetime } }) => {
+    await spacetime.subscriptionManager.ensure(SUBSCRIPTION_KEY, TASKS_SUBSCRIPTION);
+  },
+  // ...
+});
+
+// In component:
+function TasksPage() {
+  const sub = useSubscription(SUBSCRIPTION_KEY, TASKS_SUBSCRIPTION);
+  const tasks = useQuery(SUBSCRIPTION_KEY, (db) => Array.from(db.agent_task.iter()));
+  // ...
+}
 ```
 
 **Writing data:**
 ```tsx
-import { useSpacetime } from "@/features/spacetime/useSpacetime";
+import { useSpacetimeDB } from "spacetimedb/react";
+import type { DbConnection } from "@/module_bindings";
 
-const { ctx } = useSpacetime();
-ctx?.reducers.createTask({ agentTypeId, title, description });
+const { getConnection } = useSpacetimeDB();
+const conn = getConnection() as DbConnection | null;
+conn?.reducers.createTask({ agentTypeId, title, description });
 ```
 
 - Never edit `module_bindings/`. Regenerate with `just generate`.
@@ -176,7 +200,7 @@ ctx?.reducers.createTask({ agentTypeId, title, description });
 
 ### Feature Page with Route
 
-Pages parent to a section layout route, not `rootRoute` directly.
+Pages parent to a section layout route, not `rootRoute` directly. The loader calls `ensure()` to preload subscriptions.
 
 ```tsx
 import { createRoute } from "@tanstack/react-router";
@@ -260,7 +284,7 @@ function ExampleDetailsPage() {
 ```tsx
 import { Badge, Group, Paper, Text } from "@mantine/core";
 
-import type { AgentTask } from "@/module_bindings";
+import type { AgentTask } from "@/module_bindings/types";
 
 type TaskCardProps = {
   task: AgentTask;

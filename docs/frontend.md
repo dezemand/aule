@@ -28,7 +28,7 @@ Requires a running SpacetimeDB instance (see [running.md](./running.md)).
 | UI Library      | Mantine v8 (dark theme default)               |
 | Routing         | TanStack React Router v1 (code-based)         |
 | Styling         | Mantine component props + CSS Modules         |
-| State           | SpacetimeDB client-side replica + React Context |
+| State           | SpacetimeDB client-side replica + Zustand       |
 | Data layer      | SpacetimeDB WebSocket subscriptions           |
 | Code generation | SpacetimeDB CLI (`just generate`)             |
 | Icons           | Tabler Icons for React                        |
@@ -93,11 +93,11 @@ The project uses a `@/` path alias mapped to `src/` in `tsconfig.json`. Always u
 
 ```tsx
 // ✅ Good — alias import
-import { useSpacetime } from "@/features/spacetime/useSpacetime";
+import { useSubscription } from "@/lib/subscriptions/hooks/useSubscription";
 import { taskStatusColor } from "@/shared/utils/statusColors";
 
 // ❌ Bad — relative path across feature boundaries
-import { useSpacetime } from "../../features/spacetime/useSpacetime";
+import { useSubscription } from "../../lib/subscriptions/hooks/useSubscription";
 import { taskStatusColor } from "../../../shared/utils/statusColors";
 ```
 
@@ -376,7 +376,7 @@ Order of preference:
 Group imports in this order, separated by blank lines:
 
 1. React / external libraries
-2. Config and shared code (`@/config/`, `@/shared/`, `@/features/spacetime/`)
+2. Config, lib, and shared code (`@/config/`, `@/lib/`, `@/shared/`)
 3. Other features (`@/features/`)
 4. Feature-internal code (`./components/`, `./hooks/`)
 5. Module bindings (`@/module_bindings/`)
@@ -388,7 +388,8 @@ import { createRoute } from "@tanstack/react-router";
 import { Badge, Stack, Title } from "@mantine/core";
 
 import { rootRoute } from "@/config/routes";
-import { useQuery, useSubscription } from "@/features/spacetime/useSpacetime";
+import { useSubscription } from "@/lib/subscriptions/hooks/useSubscription";
+import { useQuery } from "@/lib/subscriptions/hooks/useQuery";
 import { taskStatusColor } from "@/shared/utils/statusColors";
 
 import { TaskCard } from "./components/TaskCard";
